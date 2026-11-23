@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1c1d20">
+<title>Carnet · camera</title>
+<style>
+  :root { --bg: #1c1d20; --panel: #26282c; --text: #e8e9ec; --muted: #9a9ca3; --accent: #00b8a9; --bad: #e5484d; --warn: #f0b429; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; padding: max(12px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); gap: 12px; }
+  header { display: flex; align-items: center; gap: 10px; }
+  header b { font-size: 17px; }
+  header > .muted { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #fmt { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  #status { white-space: nowrap; }
+  body.recording #fmt { display: none; }
+  #fmt + #status { margin-left: 8px; }
+  #status { margin-left: auto; font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--panel); color: var(--muted); }
+  #status.live { background: rgba(0,184,169,.18); color: var(--accent); }
+  #status.warn { background: rgba(240,180,41,.16); color: var(--warn); }
+  #status.bad { background: rgba(229,72,77,.16); color: var(--bad); }
+  #status.rec { background: rgba(229,72,77,.2); color: #ff8a8d; font-variant-numeric: tabular-nums; }
+  #status.rec::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--bad); vertical-align: 1px; }
+  .note { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
+  .note.warn { color: var(--warn); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #3a3c42; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .stage { position: relative; flex: 1; min-height: 0; background: #000; border-radius: 10px; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: contain; }
+  video.mirror { transform: scaleX(-1); }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 22px; text-align: center; gap: 10px; background: var(--bg); }
+  #overlay p { margin: 0; max-width: 420px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .bar { display: flex; gap: 10px; }
+  button { flex: 1; height: 50px; border: 0; border-radius: 10px; font: inherit; font-weight: 600; color: var(--text); background: var(--panel); }
+  button.primary { background: var(--accent); color: #062b28; }
+  button:disabled { opacity: .45; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <header><b>Carnet</b><span class="muted" data-t>phone camera</span><span id="fmt"></span><span id="status" data-t>Ready</span></header>
+  <div class="stage">
+    <video id="preview" autoplay muted playsinline class="mirror"></video>
+    <div id="overlay">
+      <p id="overlayText" data-t>Press <b>Start camera</b>, then start the recording in Carnet, on the computer.</p>
+      <p class="muted" data-t>Keep this page open and the screen on while recording. For a long recording, plug the phone in.</p>
+    </div>
+  </div>
+  <p id="recNote" class="note hidden"></p>
+  <div class="bar">
+    <button id="btnStart" class="primary" data-t>Start camera</button>
+    <button id="btnFlip" class="hidden" data-t>Switch camera</button>
+    <button id="btnStop" class="hidden" data-t>Stop</button>
+  </div>
+<script>
+'use strict';
+// Page served by Carnet on the local network (same idea as OmniCam, github.com/Orest-Z/OmniCam).
+// The camera is opened without the microphone, unless Carnet asks this phone to record (see "Recording made by this
+// phone" below). Two paths for the picture shown in Carnet:
+//  - "fallback": a WebSocket connection on the same path as this page (HTTPS), so it works as soon as the page
+//    has opened. The phone sends real video through it, compressed by its own chip (H.264, otherwise VP8):
+//    light and smooth. Without WebCodecs, JPEG pictures. If the WebSocket does not open, JPEG pictures over HTTPS.
+//  - "direct": WebRTC video, tried at the same time; used only once Carnet confirms it really receives its
+//    pictures, and dropped as soon as they stop arriving.
+// Text in English; the server adds the strings of the app's language in place of the comment below.
+/*I18N*/
+const I18N_ = typeof I18N !== 'undefined' ? I18N : { lang: 'en', dict: {} };
+const T = (src, v) => { let x = I18N_.dict[src] || src; if (v) x = x.replace(/\{(\w+)\}/g, (m, k) => (v[k] !== undefined ? v[k] : m)); return x; };
+document.documentElement.lang = I18N_.lang;
+document.querySelectorAll('[data-t]').forEach((el) => { el.innerHTML = T(el.innerHTML.trim()); });
+document.title = T(document.title);
+const PAGE_VERSION = 7;
+const $ = (id) => document.getElementById(id);
+const token = new URLSearchParams(location.search).get('t') || '';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let stream = null, pc = null, sender = null, control = null;
+let facing = 'user', want = false, wakeLock = null;
+let mode = 'secours';                 // 'secours' ou 'direct' (WebRTC confirmé par Carnet)
+let directConfirm = 0, directAttempts = 0, directTimer = null, statusRunning = false;
+
+function status(text, cls) { $('status').textContent = text; $('status').className = cls || ''; }
+function overlay(text) {
+  $('overlay').classList.toggle('hidden', !text);
+  if (text) $('overlayText').innerHTML = text;
+}
+function showStatus() {
+  if (recUi()) return; // a recording (made or being sent) has the status line
+  if (!want) return;
+  const text = mode === 'direct' ? T('Live') : T('Live (fallback mode)');
+  if ($('status').textContent !== text) status(text, 'live');
+}
+// Page plus ancienne que Carnet : rechargée, et la caméra redémarre toute seule.
+function reloadPage() { try { sessionStorage.setItem('carnet.autostart', '1'); } catch (_) {} location.reload(); }
+
+// Camera only (audio: false) while the computer records: its microphone is the one used. When Carnet asks this phone
+// to record ("armed"), the microphone is opened with the camera, in the same request (a separate request for the
+// microphone can stop the camera on some phones). Microphone refused: the camera alone, and Carnet is told.
+// 1920x1080 à 60 images par seconde demandés ; un téléphone qui ne sait pas faire 60 en 1080p donne 30
+// (le navigateur garde la meilleure définition plutôt que de descendre en 720p).
+let camFps = 30;
+async function openCamera() {
+  if (recCur) recStop('interrupted'); // never happens from a button (they are off while recording)
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  micTrack = null; micError = null;
+  const ideal = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } };
+  const audio = armed ? MIC : false;
+  if (armed) micTried = true;
+  const gum = (c) => navigator.mediaDevices.getUserMedia(c);
+  try { stream = await gum({ audio, video: ideal }); }
+  catch (err) {
+    if (err.name === 'OverconstrainedError') {
+      try { stream = await gum({ audio, video: true }); }
+      catch (e2) { if (!audio) throw e2; micError = e2.name; stream = await gum({ audio: false, video: true }); }
+    } else if (audio) {
+      micError = err.name;
+      stream = await gum({ audio: false, video: ideal }); // fails too: the camera itself is refused
+    } else throw err;
+  }
+  micTrack = stream.getAudioTracks()[0] || null;
+  levelSource();
+  if (armed) tellMic();
+  const track = stream.getVideoTracks()[0];
+  try { track.contentHint = 'motion'; } catch (_) {}
+  await upTo60(track);
+  const s = track.getSettings();
+  if (s.facingMode === 'user' || s.facingMode === 'environment') facing = s.facingMode;
+  camFps = Math.max(1, Math.min(60, Math.round(s.frameRate || 30)));
+  $('fmt').textContent = s.width && s.height ? T('{w}x{h} · {fps} fps', { w: s.width, h: s.height, fps: camFps }) : '';
+  $('preview').srcObject = new MediaStream([track]);
+  $('preview').classList.toggle('mirror', facing === 'user');
+  // Page mise en arrière-plan : le navigateur coupe la caméra ; on la rouvre au retour.
+  track.addEventListener('ended', () => { if (want && document.visibilityState === 'visible') recover(); });
+  if (sender) await sender.replaceTrack(track).then(tuneSender).catch(() => {});
+  forceKey = true;
+  sendFacing();
+  return track;
+}
+// The browser often picks 1080p at 30 frames per second over 720p at 60. The same camera is asked again for at least
+// 50 frames per second, never below 720p; if it cannot, it keeps what it gave.
+async function upTo60(track) {
+  const s0 = track.getSettings();
+  if ((s0.frameRate || 0) >= 50 || !track.applyConstraints) return;
+  let max = 0;
+  try { const c = track.getCapabilities ? track.getCapabilities() : {}; max = (c.frameRate && c.frameRate.max) || 0; } catch (_) {}
+  if (max && max < 50) return;
+  try {
+    await track.applyConstraints({ width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { min: 50, ideal: 60 } });
+    const s = track.getSettings();
+    if (Math.max(s.width || 0, s.height || 0) < 1280) await track.applyConstraints({ width: { ideal: s0.width || 1920 }, height: { ideal: s0.height || 1080 }, frameRate: { ideal: s0.frameRate || 30 } });
+  } catch (_) {}
+}
+// Image envoyée seulement si la caméra tourne vraiment et que la page est à l'écran (un onglet resté en
+// arrière-plan n'envoie pas une image figée).
+function cameraLive() {
+  const t = stream && stream.getVideoTracks()[0];
+  return !!t && t.readyState === 'live' && !t.muted && document.visibilityState === 'visible';
+}
+async function post(path, blob) {
+  const res = await fetch(path, { method: 'POST', cache: 'no-store', body: blob || '',
+    headers: { 'content-type': blob ? 'image/jpeg' : 'text/plain', 'x-carnet-code': token, 'x-carnet-facing': facing, 'x-carnet-v': String(PAGE_VERSION) } });
+  if (res.status === 403) throw Object.assign(new Error('code'), { code: 'bad-token' });
+  if (res.status === 409) { reloadPage(); throw Object.assign(new Error('reload'), { code: 'reload' }); }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  let j = {};
+  try { j = await res.json(); } catch (_) {}
+  if (j && Array.isArray(j.msgs)) j.msgs.forEach(handleMsg); // orders from Carnet while the WebSocket is down
+  return j;
+}
+
+// ---------- Chemin de secours : WebSocket ----------
+let ws = null, wsOpen = false, wsFails = 0, wsTimer = null, transport = 'ws'; // transport : 'ws' ou 'post'
+function connectWs() {
+  clearTimeout(wsTimer); wsTimer = null;
+  if (!want || ws || document.visibilityState !== 'visible') return;
+  let opened = false, s;
+  try { s = new WebSocket(`wss://${location.host}/api/ws?t=${encodeURIComponent(token)}&v=${PAGE_VERSION}`); }
+  catch (_) { wsFails++; wsRetry(false); return; }
+  s.binaryType = 'arraybuffer';
+  ws = s;
+  const guard = setTimeout(() => { if (!opened) { try { s.close(); } catch (_) {} } }, 6000);
+  s.onopen = () => {
+    clearTimeout(guard);
+    if (ws !== s) return;
+    opened = true; wsOpen = true; wsFails = 0; forceKey = true; inflight.length = 0;
+    transport = 'ws';
+    s.send(JSON.stringify({ type: 'facing', facing }));
+    overlay('');
+    if (mode !== 'direct') showStatus();
+  };
+  s.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') return;
+    let m;
+    try { m = JSON.parse(ev.data); } catch (_) { return; }
+    if (m.type === 'ack') { ackSeen = true; acked(m.ts); }
+    else if (m.type === 'key') forceKey = true;
+    // Carnet ne sait pas lire ce format : on passe au suivant (H.264 -> VP8 -> images JPEG).
+    else if (m.type === 'codec-error' && encBase) {
+      (encBase.startsWith('avc1') ? ['avc1.42E0', 'avc1.4D40'] : [encBase]).forEach((c) => failedCodecs.add(c));
+      closeEncoder(); encBase = '';
+    }
+    else handleMsg(m);
+  };
+  s.onerror = () => {};
+  s.onclose = (ev) => {
+    clearTimeout(guard);
+    if (ws !== s) return;
+    ws = null; wsOpen = false; inflight.length = 0;
+    if (!want) return;
+    // Une autre page envoie déjà l'image à Carnet (autre onglet, autre téléphone) : on attend son tour.
+    if (ev.code === 4001) {
+      status(T('Another page is already sending the picture'), 'warn');
+      wsTimer = setTimeout(connectWs, 2000);
+      return;
+    }
+    if (!opened) wsFails++;
+    wsRetry(opened);
+  };
+}
+function wsRetry(wasOpen) {
+  if (!want) return;
+  // Le WebSocket ne s'ouvre pas : images JPEG en HTTPS en attendant ; il est réessayé de temps en temps.
+  if (wsFails >= 2 && transport !== 'post') { transport = 'post'; postLoop(); }
+  if (transport === 'ws' && mode !== 'direct') status(T('Reconnecting…'), 'warn');
+  clearTimeout(wsTimer);
+  wsTimer = setTimeout(connectWs, wasOpen ? 300 : Math.min(15000, 1000 * 2 ** Math.min(wsFails, 4)));
+}
+
+// Vidéo compressée par le téléphone (WebCodecs). L'image de la caméra passe par un canevas : orientation et
+// taille toujours justes, quel que soit le téléphone.
+const ecanvas = document.createElement('canvas');
+const ectx = ecanvas.getContext('2d', { alpha: false });
+const LEVELS = [1, 0.6, 0.36, 0.22];   // débit plein, puis réduit si le Wi-Fi ne suit pas
+let enc = null, encBase = '', encCodec = '', encDecCodec = '', encCfg = null, encW = 0, encH = 0, encDesc = null, encSetup = null;
+let encLevel = 0, forceKey = true, lastKeyAt = 0, useJpeg = false;
+const failedCodecs = new Set();
+let sent = 0, skipped = 0, skippedEnc = 0, statAt = 0, calmSince = 0, upWait = 20000;
+// Encoder too slow for 60 frames per second (phone without hardware encoding): the picture gets smaller first (1280,
+// then 960, then 640 pixels on the long side) to keep 60; only below that, one frame out of two (30 steady rather
+// than 45 in fits and starts).
+const SIDES = [1280, 960, 640];
+let sideIdx = 0, settleUntil = 0, slowWindows = 0;
+let half = false, odd = false;
+const encFps = () => (half ? Math.round(camFps / 2) : camFps);
+// Images envoyées mais pas encore reçues par Carnet (il accuse réception de chacune). Si la plus ancienne attend
+// trop, le Wi-Fi ne suit pas : on saute des images au lieu de laisser le retard grandir, et le débit baisse.
+const inflight = [];
+let ackSeen = false;
+function acked(ts) { while (inflight.length && inflight[0] <= ts) inflight.shift(); }
+function lagMs(now) {
+  if (!inflight.length) return 0;
+  const age = now - inflight[0] / 1000;
+  if (!ackSeen && age > 3000) { inflight.length = 0; return 0; } // pas d'accusés : on ne s'y fie pas
+  return age;
+}
+// Taille envoyée : celle de la caméra, plafonnée à 1280 pixels de côté (720p), à la cadence de la caméra (30 ou
+// 60 images par seconde) : fluide sur un Wi-Fi moyen, léger à décoder pour l'ordinateur. En nombres pairs.
+// While this phone records, the picture shown in Carnet is only for framing: smaller and lighter, so that the phone's
+// encoder and the Wi-Fi keep their strength for the recording.
+const maxSide = () => (recCur ? Math.min(960, SIDES[sideIdx]) : SIDES[sideIdx]);
+function sizeFor(v, maxSide) {
+  const w = v.videoWidth, h = v.videoHeight;
+  if (!w || !h) return null;
+  const k = Math.min(1, maxSide / Math.max(w, h));
+  return [Math.max(2, Math.round((w * k) / 2) * 2), Math.max(2, Math.round((h * k) / 2) * 2)];
+}
+const bitrateFor = (w, h) => Math.round(Math.max(1.5e6, (5e6 * w * h) / (1920 * 1080)) * (encFps() > 40 ? 1.5 : 1) * LEVELS[encLevel] * (recCur ? 0.6 : 1));
+function toB64(d) {
+  const u = d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+  let s = '';
+  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+  return btoa(s);
+}
+function closeEncoder() { if (enc) { try { enc.close(); } catch (_) {} } enc = null; }
+function needEncoder() { if (!encSetup) encSetup = setupEncoder().finally(() => { encSetup = null; }); }
+async function setupEncoder() {
+  closeEncoder();
+  const v = $('preview');
+  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') useJpeg = true;
+  if (useJpeg) return;
+  for (const base of ['avc1.42E0', 'avc1.4D40', 'vp8']) {
+    if (failedCodecs.has(base)) continue;
+    const avc = base !== 'vp8';
+    const size = sizeFor(v, maxSide());
+    if (!size) return; // caméra pas encore prête : nouvel essai à l'image suivante
+    const codec = avc ? base + (size[0] * size[1] > 1280 * 720 ? '28' : '1F') : base;
+    for (const format of avc ? ['annexb', 'avc'] : [null]) {
+      const cfg = { codec, width: size[0], height: size[1], bitrate: bitrateFor(size[0], size[1]), framerate: encFps(), latencyMode: 'realtime', ...(format ? { avc: { format } } : {}) };
+      let ok = false;
+      try { ok = !!(await VideoEncoder.isConfigSupported(cfg)).supported; } catch (_) {}
+      if (!want) return;
+      if (!ok) continue;
+      try {
+        const e = new VideoEncoder({
+          output: (chunk, meta) => { if (enc === e) onChunk(chunk, meta); },
+          error: () => { if (enc === e) { failedCodecs.add(base); enc = null; } },
+        });
+        e.configure(cfg);
+        enc = e; encBase = base; encCodec = codec; encDecCodec = ''; encCfg = cfg; encW = size[0]; encH = size[1]; encDesc = null;
+        forceKey = true; calmSince = performance.now();
+        settleUntil = performance.now() + 4000; slowWindows = 0; // a new encoder warms up before being judged
+        return;
+      } catch (_) {}
+    }
+  }
+  useJpeg = true; // aucun format vidéo : images JPEG
+}
+function onChunk(chunk, meta) {
+  if (!ws || !wsOpen) return;
+  const dc = meta && meta.decoderConfig;
+  if (dc && dc.codec) encDecCodec = dc.codec;
+  if (dc && dc.description) encDesc = toB64(dc.description);
+  // Avant chaque image clé, le format : Carnet peut reprendre la lecture à partir de n'importe laquelle.
+  if (chunk.type === 'key') ws.send(JSON.stringify({ type: 'config', codec: encDecCodec || encCodec, width: encW, height: encH, description: encDesc }));
+  const buf = new ArrayBuffer(9 + chunk.byteLength);
+  const dv = new DataView(buf);
+  dv.setUint8(0, chunk.type === 'key' ? 1 : 2);
+  dv.setFloat64(1, chunk.timestamp);
+  chunk.copyTo(new Uint8Array(buf, 9));
+  ws.send(buf);
+  inflight.push(chunk.timestamp);
+}
+// Une image par image de la caméra (pas deux fois la même).
+let chain = 0, lastStep = 0;
+function startFrames() {
+  const id = ++chain, v = $('preview');
+  const step = () => {
+    if (id !== chain || !want) return;
+    lastStep = performance.now();
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step); else setTimeout(step, 33);
+    try { onFrame(v); } catch (_) {}
+  };
+  step();
+}
+function onFrame(v) {
+  const now = performance.now();
+  stats(now);
+  if (mode !== 'secours' || transport !== 'ws' || !wsOpen || !cameraLive() || v.readyState < 2) return;
+  if (useJpeg) { sendJpeg(v); return; }
+  if (!enc) { needEncoder(); return; }
+  if (enc.state !== 'configured') return;
+  const size = sizeFor(v, maxSide());
+  if (size && (size[0] !== encW || size[1] !== encH || encCfg.framerate !== encFps())) { closeEncoder(); needEncoder(); return; } // téléphone tourné, autre caméra
+  if (half && (odd = !odd)) return;
+  // Encodeur ou Wi-Fi en retard : l'image est sautée avant d'être encodée (la vidéo reste intacte).
+  if (enc.encodeQueueSize > 2) { skipped++; skippedEnc++; return; }
+  if (lagMs(now) > 200 || ws.bufferedAmount > 1e6) { skipped++; return; }
+  if (ecanvas.width !== encW || ecanvas.height !== encH) { ecanvas.width = encW; ecanvas.height = encH; }
+  ectx.drawImage(v, 0, 0, encW, encH);
+  const vf = new VideoFrame(ecanvas, { timestamp: Math.round(now * 1000) });
+  // Image clé quand Carnet la demande (début, reprise) ; sinon une par minute seulement : la connexion ne perd
+  // rien, et une image clé pèse lourd sur un Wi-Fi faible.
+  const key = forceKey || now - lastKeyAt > 60000;
+  try {
+    enc.encode(vf, { keyFrame: key });
+    sent++;
+    if (key) { forceKey = false; lastKeyAt = now; }
+  } catch (_) { enc = null; }
+  finally { vf.close(); }
+}
+// Toutes les 2 s : si trop d'images sont sautées, débit (ou qualité JPEG) réduit. Il remonte après un moment
+// sans souci (20 s, puis plus longtemps à chaque nouvelle baisse, pour ne pas faire le yoyo).
+function stats(now) {
+  if (now - statAt < 2000) return;
+  const total = sent + skipped;
+  // Two windows in a row with more than 5 % of the frames skipped by the encoder: smaller picture.
+  slowWindows = enc && camFps > 40 && now > settleUntil && total && skippedEnc / total > 0.05 ? slowWindows + 1 : 0;
+  if (slowWindows >= 2) {
+    slowWindows = 0;
+    if (sideIdx < SIDES.length - 1) { sideIdx++; closeEncoder(); needEncoder(); }
+    else if (!half) { half = true; retune(); settleUntil = now + 4000; }
+  }
+  // Seul le retard du Wi-Fi fait baisser le débit (un encodeur lent n'irait pas plus vite avec moins de débit).
+  const ratio = total ? (skipped - skippedEnc) / total : 0;
+  if (ratio > 0.1) {
+    calmSince = now;
+    if (enc && encLevel < LEVELS.length - 1) { encLevel++; upWait = Math.min(120000, upWait * 2); retune(); }
+    else if (useJpeg && quality > 0.5) { quality = Math.max(0.5, quality - 0.08); upWait = Math.min(120000, upWait * 2); }
+  } else if (ratio > 0.03) calmSince = now;
+  else if (now - calmSince > upWait) {
+    calmSince = now;
+    if (enc && encLevel > 0) { encLevel--; retune(); }
+    else if (useJpeg) quality = Math.min(0.78, quality + 0.04);
+  }
+  sent = skipped = skippedEnc = 0; statAt = now;
+}
+function retune() {
+  try { encCfg = { ...encCfg, bitrate: bitrateFor(encW, encH), framerate: encFps() }; enc.configure(encCfg); forceKey = true; }
+  catch (_) { closeEncoder(); }
+}
+
+// Images JPEG : quand le navigateur ne sait pas compresser en vidéo, ou par HTTPS si le WebSocket ne passe pas.
+const rcanvas = document.createElement('canvas');
+const rctx = rcanvas.getContext('2d');
+let quality = 0.78, jpegBusy = false;
+async function grab(v) {
+  try {
+    const w = v.videoWidth, h = v.videoHeight;
+    if (!w || !h || v.readyState < 2 || !cameraLive()) return null;
+    const scale = Math.min(1, 1280 / Math.max(w, h));
+    const cw = Math.round(w * scale), ch = Math.round(h * scale);
+    if (rcanvas.width !== cw || rcanvas.height !== ch) { rcanvas.width = cw; rcanvas.height = ch; }
+    rctx.drawImage(v, 0, 0, cw, ch);
+    const at = performance.now();
+    const blob = await new Promise((r) => rcanvas.toBlob(r, 'image/jpeg', quality));
+    return blob ? { blob, at } : null;
+  } catch (_) { return null; }
+}
+function sendJpeg(v) {
+  if (jpegBusy || lagMs(performance.now()) > 250 || ws.bufferedAmount > 1e6) { skipped++; return; }
+  jpegBusy = true;
+  grab(v).then((f) => {
+    jpegBusy = false;
+    if (!f || !ws || !wsOpen) return;
+    const head = new ArrayBuffer(9);
+    const dv = new DataView(head);
+    dv.setUint8(0, 3);
+    dv.setFloat64(1, f.at * 1000);
+    ws.send(new Blob([head, f.blob]));
+    inflight.push(f.at * 1000);
+    sent++;
+  });
+}
+// Attend une nouvelle image de la caméra (100 ms au plus).
+function nextFrame(v) {
+  if (!v.requestVideoFrameCallback) return sleep(33);
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { try { v.cancelVideoFrameCallback(id); } catch (_) {} resolve(); }, 100);
+    const id = v.requestVideoFrameCallback(() => { clearTimeout(t); resolve(); });
+  });
+}
+// Dernier recours, quand le WebSocket ne s'ouvre pas : une image JPEG par requête HTTPS (la suivante est
+// préparée pendant que la précédente voyage).
+let postRunning = false;
+async function postLoop() {
+  if (postRunning) return;
+  postRunning = true;
+  const v = $('preview');
+  let fails = 0, next = null, lastSent = 0, postAvg = 30, lastAdjust = 0;
+  while (want && transport === 'post') {
+    try {
+      if (mode === 'direct' || !cameraLive()) { next = null; await sleep(250); continue; }
+      let f = next ? await next : null;
+      next = null;
+      if (!f || performance.now() - f.at > 200) f = await grab(v);
+      if (!f) { await nextFrame(v); continue; }
+      const gap = 33 - (performance.now() - lastSent);
+      if (gap > 0) await sleep(gap);
+      lastSent = performance.now();
+      const sending = post('/api/frame', f.blob);
+      next = nextFrame(v).then(() => grab(v));
+      await sending;
+      const now = performance.now();
+      postAvg = postAvg * 0.8 + (now - lastSent) * 0.2;
+      if (postAvg > 45 && quality > 0.5 && now - lastAdjust > 1500) { quality = Math.max(0.5, quality - 0.06); lastAdjust = now; }
+      else if (postAvg < 22 && quality < 0.78 && now - lastAdjust > 3000) { quality = Math.min(0.78, quality + 0.04); lastAdjust = now; }
+      if (fails) overlay('');
+      fails = 0;
+      showStatus();
+    } catch (err) {
+      next = null;
+      if (err.code === 'bad-token') { postRunning = false; badToken(); return; }
+      if (err.code === 'reload') { postRunning = false; return; }
+      fails++;
+      status(T('Reconnecting…'), 'warn');
+      if (fails > 3) overlay(T('The computer is not answering. Check that Carnet is open and that the phone is on the same Wi-Fi as the computer.'));
+      await sleep(Math.min(5000, 300 * fails));
+    }
+  }
+  postRunning = false;
+}
+
+// ---------- Passage au direct et retour au secours ----------
+function toDirect() { mode = 'direct'; directConfirm = 0; }
+function toSecours() { if (mode !== 'secours') { mode = 'secours'; forceKey = true; } directConfirm = 0; }
+// Quand la vidéo directe est connectée, on demande à Carnet s'il en reçoit vraiment les images : 3 oui de suite
+// pour y passer ; un non (ou plus de réponse) en direct, et le secours reprend aussitôt.
+async function statusLoop() {
+  if (statusRunning) return;
+  statusRunning = true;
+  let fails = 0;
+  while (want) {
+    const direct = mode === 'direct';
+    if (direct || (pc && pc.connectionState === 'connected')) {
+      try {
+        const r = await post('/api/status', null);
+        fails = 0;
+        const connected = pc && pc.connectionState === 'connected';
+        if (mode === 'direct') { if (!r.direct || !connected) toSecours(); }
+        else if (r.direct && connected) { if (++directConfirm >= 3) toDirect(); }
+        else directConfirm = 0;
+        if (mode === 'direct' || wsOpen) showStatus();
+      } catch (err) {
+        if (err.code === 'bad-token') { statusRunning = false; badToken(); return; }
+        if (err.code === 'reload') { statusRunning = false; return; }
+        if (mode === 'direct' && ++fails >= 2) toSecours();
+      }
+    }
+    await sleep(mode === 'direct' ? 500 : 400);
+  }
+  statusRunning = false;
+}
+
+// ---------- Chemin direct : WebRTC ----------
+// H.264 d'abord : encodé par le matériel du téléphone.
+function preferCodecs(transceiver) {
+  const codecs = (RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video') || {}).codecs || [];
+  const apple = /iPhone|iPad|Macintosh/.test(navigator.userAgent);
+  const rank = (c) => {
+    const m = c.mimeType.toLowerCase(), f = c.sdpFmtpLine || '';
+    if (m === 'video/h264') { const high = /profile-level-id=64/i.test(f); return (high ? (apple ? 0 : 2) : apple ? 2 : 0) + (/packetization-mode=1/.test(f) ? 0 : 1); }
+    if (m === 'video/vp8') return 4;
+    if (m === 'video/vp9') return 5;
+    return 9;
+  };
+  try { transceiver.setCodecPreferences([...codecs].sort((a, b) => rank(a) - rank(b))); } catch (_) {}
+}
+async function tuneSender() {
+  if (!sender || !stream) return;
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    const s = stream.getVideoTracks()[0].getSettings();
+    const px = (s.width || 1920) * (s.height || 1080);
+    const base = px >= 1920 * 1080 ? 12e6 : px >= 1280 * 720 ? 6e6 : 3e6;
+    p.encodings[0].maxBitrate = Math.round(base * (camFps > 40 ? 1.6 : 1));
+    p.encodings[0].maxFramerate = camFps;
+    // This phone records: preview at most 960 pixels on the long side, 2.5 Mbit/s.
+    const long = Math.max(s.width || 1920, s.height || 1080);
+    p.encodings[0].scaleResolutionDownBy = recCur ? Math.max(1, long / 960) : 1;
+    if (recCur) p.encodings[0].maxBitrate = Math.min(p.encodings[0].maxBitrate, 2.5e6);
+    // Si le réseau se resserre, garder la fluidité : la définition baisse un peu plutôt que de saccader. Sur un
+    // réseau local, le débit (8 Mbit/s au départ, 2,5 au minimum) suffit d'habitude pour n'avoir à rien baisser.
+    p.degradationPreference = 'maintain-framerate';
+    await sender.setParameters(p);
+  } catch (_) {}
+}
+// Caméra utilisée et taille de son image (telle qu'affichée, donc dans le bon sens) : Carnet s'en sert pour
+// la taille de l'enregistrement, même quand la vidéo directe passe un moment en plus petit.
+function sendFacing() {
+  const v = $('preview');
+  const msg = JSON.stringify({ type: 'facing', facing, width: v.videoWidth || 0, height: v.videoHeight || 0 });
+  if (control && control.readyState === 'open') control.send(msg);
+  if (ws && wsOpen) ws.send(msg);
+}
+function waitIce(peer, ms = 2500) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); peer.removeEventListener('icegatheringstatechange', check); resolve(); };
+    const check = () => peer.iceGatheringState === 'complete' && done();
+    const t = setTimeout(done, ms);
+    peer.addEventListener('icegatheringstatechange', check);
+  });
+}
+function teardown() {
+  if (control) { try { control.close(); } catch (_) {} control = null; }
+  if (pc) { pc.onconnectionstatechange = null; pc.close(); pc = null; }
+  sender = null;
+  toSecours();
+}
+async function tryDirect() {
+  if (!want || !stream) return;
+  clearTimeout(directTimer); directTimer = null;
+  teardown();
+  directAttempts++;
+  const peer = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
+  pc = peer;
+  const tr = peer.addTransceiver(stream.getVideoTracks()[0], { direction: 'sendonly' });
+  sender = tr.sender;
+  preferCodecs(tr);
+  control = peer.createDataChannel('carnet', { ordered: true });
+  control.onopen = sendFacing;
+  peer.onconnectionstatechange = () => {
+    if (pc !== peer) return;
+    const st = peer.connectionState;
+    if (st === 'connected') { directAttempts = 0; tuneSender(); }
+    // Coupure : retour immédiat au secours ; si le direct ne revient pas seul en 4 s, nouvel essai.
+    if (st === 'disconnected') { toSecours(); setTimeout(() => { if (pc === peer && peer.connectionState !== 'connected') { teardown(); scheduleDirect(); } }, 4000); }
+    if (st === 'failed' || st === 'closed') { teardown(); scheduleDirect(); }
+  };
+  try {
+    await peer.setLocalDescription(await peer.createOffer());
+    await waitIce(peer);
+    if (pc !== peer) return;
+    const res = await fetch('/api/session', { method: 'POST', headers: { 'content-type': 'application/json' }, cache: 'no-store',
+      body: JSON.stringify({ v: PAGE_VERSION, token, sdp: peer.localDescription.sdp, device: { platform: /iPhone/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'autre' } }) });
+    if (res.status === 409) { reloadPage(); return; }
+    const body = await res.json();
+    if (!body.ok) { if (body.error === 'bad-token') { badToken(); return; } throw new Error(body.error); }
+    if (pc !== peer) return;
+    await peer.setRemoteDescription({ type: 'answer', sdp: body.sdp });
+    // Pas connecté au bout de 15 s : on laisse tomber cet essai (le secours continue d'envoyer l'image).
+    setTimeout(() => { if (pc === peer && peer.connectionState !== 'connected') { teardown(); scheduleDirect(); } }, 15000);
+  } catch (_) {
+    if (pc === peer) { teardown(); scheduleDirect(); }
+  }
+}
+// Nouvel essai du direct, de plus en plus espacé : 10 s, 20 s, 40 s, 80 s, puis toutes les 2 minutes.
+function scheduleDirect() {
+  if (!want || directTimer) return;
+  const delay = Math.min(120000, 10000 * 2 ** Math.min(Math.max(0, directAttempts - 1), 4));
+  directTimer = setTimeout(() => { directTimer = null; tryDirect(); }, delay);
+}
+
+// ---------- Recording made by this phone ----------
+// When Carnet asks for it ("Recorded by: the phone"), this phone records the picture and the sound itself, with its
+// own encoder, at the camera's full quality. The file leaves in pieces of about a second, one HTTPS request each;
+// each answer says how many pieces Carnet has written to its disk, and only those are dropped here. Until then every
+// piece stays on the phone (in memory and in the browser's storage): a Wi-Fi cut, a reload of this page or a restart
+// of Carnet loses nothing, and the sending picks up where it stopped. Orders from Carnet (arm, start, stop) come by
+// the WebSocket, or in the answer to the next request when the WebSocket is down.
+const MIC = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+const REC_TYPES = ['video/webm;codecs=h264,opus', 'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+const SLICE = 4 * 1024 * 1024;   // a piece never goes over this (a browser may hand over everything at the end)
+let armed = false, armedAt = 0, arming = false;
+let micTrack = null, micError = null, micTried = false;
+let recorder = null, recCur = null;
+const recs = new Map();          // id -> recording being made or still to send
+const doneIds = new Set();       // recordings fully sent (an order received twice does not start them again)
+let pumping = false, sendFails = 0, lastSendOk = 0, sentNoteUntil = 0;
+
+function handleMsg(m) {
+  if (!m || typeof m.type !== 'string') return;
+  if (m.type === 'arm') arm(!!m.on);
+  else if (m.type === 'rec-start' && typeof m.id === 'string') recStart(m.id, Math.max(0, Number(m.lead) || 0));
+  else if (m.type === 'rec-stop' && typeof m.id === 'string') { if (recCur && recCur.id === m.id) recStop('stopped'); }
+}
+// Carnet says whether this phone records (it says it again every few seconds). The microphone is opened then, and
+// closed when Carnet stops asking (record window closed, recording on the computer, Carnet gone for 20 s).
+function arm(on) {
+  armedAt = Date.now();
+  if (!on) { if (armed) { armed = false; micTried = false; if (!recCur) releaseMic(); } return; }
+  const was = armed;
+  armed = true;
+  if (!was) micTried = false;
+  if (micTrack && micTrack.readyState === 'live') { if (!was) tellMic(); return; }
+  // Camera off: the microphone opens with it. Already tried (refused): not asked again in a loop.
+  if (!want || !stream || recCur || arming || micTried) { if (!was && micTried) tellMic(); return; }
+  arming = true;
+  openCamera().then(() => { if (want) startFrames(); }).catch(() => {}).finally(() => { arming = false; });
+}
+setInterval(() => { if (armed && !recCur && want && Date.now() - armedAt > 20000) arm(false); }, 5000);
+function releaseMic() {
+  if (!micTrack) return;
+  try { micTrack.stop(); } catch (_) {}
+  try { if (stream) stream.removeTrack(micTrack); } catch (_) {}
+  micTrack = null;
+  levelSource();
+}
+function tell(msg) {
+  if (ws && wsOpen) { try { ws.send(JSON.stringify(msg)); return; } catch (_) {} }
+  recPost('/api/rec-event', msg).catch(() => {});
+}
+const tellMic = () => tell({ type: 'mic', ok: !!(micTrack && micTrack.readyState === 'live'), error: micTrack ? null : micError || 'none' });
+// Sound level of the microphone, for Carnet's meter. iOS starts the sound only after a tap: prepared on "Start camera".
+let audioCtx = null, analyser = null, levelSrc = null, levelData = null;
+function audioReady() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!audioCtx && AC) { audioCtx = new AC(); analyser = audioCtx.createAnalyser(); analyser.fftSize = 512; levelData = new Uint8Array(analyser.fftSize); }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  } catch (_) {}
+}
+function levelSource() {
+  try { if (levelSrc) levelSrc.disconnect(); } catch (_) {}
+  levelSrc = null;
+  if (!audioCtx || !micTrack) return;
+  try { levelSrc = audioCtx.createMediaStreamSource(new MediaStream([micTrack])); levelSrc.connect(analyser); } catch (_) { levelSrc = null; }
+}
+setInterval(() => {
+  if (!armed || !levelSrc || !ws || !wsOpen) return;
+  analyser.getByteTimeDomainData(levelData);
+  let peak = 0;
+  for (const x of levelData) peak = Math.max(peak, Math.abs(x - 128));
+  try { ws.send(JSON.stringify({ type: 'level', v: Math.round((peak / 128) * 1000) / 1000 })); } catch (_) {}
+}, 150);
+
+function recStart(id, lead) {
+  if (recs.has(id) || doneIds.has(id)) return;
+  if (recCur) recStop('replaced');
+  const vt = stream && stream.getVideoTracks()[0];
+  if (typeof MediaRecorder === 'undefined' || !want || !vt || vt.readyState !== 'live') {
+    tell({ type: 'error', id, error: typeof MediaRecorder === 'undefined' ? 'no-recorder' : 'no-camera' });
+    return;
+  }
+  const tracks = [vt];
+  if (micTrack && micTrack.readyState === 'live') tracks.push(micTrack);
+  const s = vt.getSettings();
+  const fps = Math.min(60, Math.round(s.frameRate || camFps || 30));
+  const px = (s.width || 1280) * (s.height || 720);
+  const opts = { videoBitsPerSecond: Math.round(Math.min(16e6, Math.max(4e6, px * fps * 0.1))), audioBitsPerSecond: 128000 };
+  const mime = REC_TYPES.find((m) => { try { return MediaRecorder.isTypeSupported(m); } catch (_) { return false; } }) || '';
+  let mr = null;
+  for (const o of [mime ? { ...opts, mimeType: mime } : opts, opts, {}]) { try { mr = new MediaRecorder(new MediaStream(tracks), o); break; } catch (_) {} }
+  if (!mr) { tell({ type: 'error', id, error: 'recorder' }); return; }
+  const r = { id, mime, chunks: new Map(), seq: 0, next: 0, last: null, total: 0, acked: 0, ended: false, endAcked: false, reason: null, lead, t0: performance.now(), sound: tracks.length > 1 };
+  recs.set(id, r); recCur = r; recorder = mr;
+  const got = performance.now();
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) addChunk(r, e.data); };
+  mr.onstart = () => {
+    r.mime = mr.mimeType || mime || 'video/webm';
+    // Where the countdown shown by Carnet ends, in this recording (its first seconds are cut from the clip).
+    r.lead = Math.max(0, (got + lead * 1000 - performance.now()) / 1000);
+    r.t0 = performance.now();
+    saveMeta(r);
+    tell({ type: 'started', id, mime: r.mime, lead: r.lead, width: s.width || 0, height: s.height || 0, fps, sound: r.sound });
+  };
+  mr.onstop = () => recEnded(r);
+  // Camera taken away (another app, page in the background): the recording ends there, what it holds is sent.
+  vt.addEventListener('ended', () => { if (recCur === r) recStop('interrupted'); }, { once: true });
+  mr.onerror = () => { r.reason = r.reason || 'error'; try { if (mr.state !== 'inactive') mr.stop(); else recEnded(r); } catch (_) { recEnded(r); } };
+  try { mr.start(1000); } catch (_) { recs.delete(id); recCur = null; recorder = null; tell({ type: 'error', id, error: 'recorder' }); return; }
+  tuneSender();
+  buttons(); showStatus();
+}
+function recStop(reason) {
+  const r = recCur;
+  if (!r || !recorder) return;
+  r.reason = r.reason || reason;
+  try { if (recorder.state !== 'inactive') recorder.stop(); else recEnded(r); } catch (_) { recEnded(r); }
+}
+function addChunk(r, blob) {
+  for (let off = 0; off < blob.size; off += SLICE) {
+    const part = blob.size > SLICE ? blob.slice(off, Math.min(blob.size, off + SLICE)) : blob;
+    const seq = r.seq++;
+    r.chunks.set(seq, part);
+    r.total += part.size;
+    idb.putChunk(r.id, seq, part);
+  }
+  saveMeta(r);
+  pump();
+}
+function recEnded(r) {
+  if (r.ended) return;
+  r.ended = true;
+  r.last = r.seq - 1;
+  r.reason = r.reason || 'stopped';
+  if (recCur === r) { recCur = null; recorder = null; tuneSender(); }
+  if (!armed) releaseMic();
+  saveMeta(r);
+  buttons(); showStatus();
+  pump();
+}
+const saveMeta = (r) => idb.putRec({ id: r.id, mime: r.mime, seq: r.seq, total: r.total, acked: r.acked, lead: r.lead, ended: r.ended, reason: r.reason, at: Date.now() });
+// First piece still held, from `from` on (r.seq when there is none).
+function firstHeld(r, from = 0) { let k = r.seq; for (const s of r.chunks.keys()) if (s >= from && s < k) k = s; return k; }
+const hasWork = (r) => r.next === null || r.next < r.seq || (r.ended && !r.endAcked);
+// One request at a time, oldest recording first; after a failure, a new try 0.8, 1.6, 3.2, then every 5 seconds.
+async function pump() {
+  if (pumping) return;
+  pumping = true;
+  try {
+    for (;;) {
+      const r = [...recs.values()].find(hasWork);
+      if (!r) break;
+      try {
+        let a;
+        if (r.next === null) a = await recPost('/api/rec-event', { type: 'resume', id: r.id, first: firstHeld(r), seq: r.seq, mime: r.mime });
+        else if (r.chunks.has(r.next)) a = await sendChunk(r, r.next);
+        else if (r.next < r.seq) a = await recPost('/api/rec-event', { type: 'skip', id: r.id, to: firstHeld(r, r.next) }); // piece gone from this phone
+        else a = await recPost('/api/rec-event', { type: 'end', id: r.id, last: r.last, total: r.total, lead: r.lead, reason: r.reason });
+        sendFails = 0; lastSendOk = Date.now();
+        answered(r, a);
+      } catch (err) {
+        if (err.code === 'bad-token' || err.code === 'reload') break;
+        sendFails++;
+        showStatus();
+        await sleep(Math.min(5000, 400 * 2 ** Math.min(sendFails, 4)));
+      }
+    }
+  } finally { pumping = false; showStatus(); }
+}
+async function sendChunk(r, seq) {
+  const res = await fetch(`/api/rec?id=${encodeURIComponent(r.id)}&seq=${seq}`, { method: 'POST', cache: 'no-store', body: r.chunks.get(seq),
+    headers: { 'content-type': 'application/octet-stream', 'x-carnet-code': token, 'x-carnet-v': String(PAGE_VERSION), 'x-carnet-mime': r.mime || '', 'x-carnet-total': String(r.total) } });
+  return answerOf(res);
+}
+async function recPost(path, body) {
+  const res = await fetch(path, { method: 'POST', cache: 'no-store', body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', 'x-carnet-code': token, 'x-carnet-v': String(PAGE_VERSION) } });
+  return answerOf(res);
+}
+async function answerOf(res) {
+  if (res.status === 403) throw Object.assign(new Error('code'), { code: 'bad-token' });
+  if (res.status === 409) { if (!recCur) reloadPage(); throw Object.assign(new Error('reload'), { code: 'reload' }); }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const j = await res.json();
+  if (j && Array.isArray(j.msgs)) j.msgs.forEach(handleMsg);
+  return j;
+}
+// Carnet's answer: `next` = pieces it has written to its disk (they are dropped here), `end` = it has the end,
+// `resume` = it needs to be told again which recording this is, `stop` = it asks this phone to stop recording.
+function answered(r, a) {
+  if (!a) return;
+  if (a.resume) { r.next = null; return; }
+  if (typeof a.next === 'number') {
+    for (const s of [...r.chunks.keys()]) if (s < a.next) { r.acked += r.chunks.get(s).size; r.chunks.delete(s); idb.delChunk(r.id, s); }
+    r.next = a.next;
+  }
+  if (a.end) r.endAcked = true;
+  if (a.stop && recCur === r) recStop('stopped');
+  if (r.ended && r.endAcked && r.next >= r.seq) {
+    recs.delete(r.id); doneIds.add(r.id); idb.delRec(r.id);
+    sentNoteUntil = Date.now() + 8000;
+  } else saveMeta(r);
+  showStatus();
+}
+// After a reload: recordings this phone had not finished sending (one that was being made ends where it stopped).
+async function loadPending() {
+  let list = [];
+  try { list = await idb.load(); } catch (_) {}
+  for (const { meta: m, chunks } of list) {
+    if (!m || !m.id || recs.has(m.id)) continue;
+    const seq = Math.max(m.seq || 0, chunks.size ? Math.max(...chunks.keys()) + 1 : 0);
+    recs.set(m.id, { id: m.id, mime: m.mime || '', chunks, seq, next: null, last: seq - 1, total: m.total || 0, acked: m.acked || 0, ended: true, endAcked: false, reason: m.ended ? m.reason || 'stopped' : 'interrupted', lead: m.lead || 0, t0: 0, sound: true });
+  }
+  if (recs.size) { showStatus(); pump(); }
+}
+// What the status line and the line under the picture say about recordings. Returns false when there is none.
+function recUi() {
+  const note = $('recNote');
+  document.body.classList.toggle('recording', !!recCur);
+  const say = (text, cls) => { note.textContent = text; note.className = 'note' + (cls ? ' ' + cls : ''); note.classList.toggle('hidden', !text); };
+  if (recCur) {
+    const sec = Math.max(0, Math.floor((performance.now() - recCur.t0) / 1000));
+    const behind = recCur.total - recCur.acked;
+    status(T('Rec {time}', { time: `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` }), 'rec');
+    say((recCur.sound ? T('This phone records the picture and the sound.') : T('This phone records the picture, without sound: the microphone was refused.'))
+      + (behind > 8e6 ? ' ' + T('{mb} MB waiting to be sent.', { mb: Math.round(behind / 1e6) }) : ''));
+    return true;
+  }
+  if (recs.size) {
+    let total = 0, acked = 0;
+    recs.forEach((r) => { total += r.total; acked += r.acked; });
+    const stuck = sendFails >= 2 || (lastSendOk && Date.now() - lastSendOk > 8000);
+    status(T('Sending {pct} %', { pct: total ? Math.min(99, Math.floor((acked / total) * 100)) : 0 }), 'warn');
+    say(stuck ? T('The computer cannot be reached: the recording waits on this phone. Keep this page open on the same Wi-Fi as the computer, it goes on by itself.')
+      : T('Sending the recording to the computer: keep this page open.'), stuck ? 'warn' : '');
+    return true;
+  }
+  say(Date.now() < sentNoteUntil ? T('Recording sent to the computer.') : '');
+  return false;
+}
+// Twice a second while a recording is made or sent; when that ends, the status line goes back to the connection.
+let recShown = false;
+setInterval(() => {
+  if (!recCur && !recs.size && !recShown && $('recNote').classList.contains('hidden')) return;
+  const shown = recUi();
+  if (!shown && recShown) {
+    if (!want) status(T('Stopped'), '');
+    else if (wsOpen || mode === 'direct' || (transport === 'post' && postRunning)) showStatus();
+    else status(T('Reconnecting…'), 'warn');
+  }
+  recShown = shown;
+}, 500);
+// Pieces not yet written by Carnet, also kept in the browser's storage (a reload of the page loses nothing).
+const idb = (() => {
+  let opening = null;
+  const open = () => opening || (opening = new Promise((resolve) => {
+    try {
+      const q = indexedDB.open('carnet-recordings', 1);
+      q.onupgradeneeded = () => { q.result.createObjectStore('chunks'); q.result.createObjectStore('recs'); };
+      q.onsuccess = () => resolve(q.result);
+      q.onerror = q.onblocked = () => resolve(null);
+    } catch (_) { resolve(null); }
+  }));
+  const run = async (store, fn) => {
+    const db = await open();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(store, 'readwrite');
+        const req = fn(tx.objectStore(store));
+        tx.oncomplete = () => resolve(req ? req.result : null);
+        tx.onerror = tx.onabort = () => resolve(null);
+      } catch (_) { resolve(null); }
+    });
+  };
+  const range = (id) => IDBKeyRange.bound(id + ':', id + ':￿');
+  return {
+    putChunk: (id, seq, blob) => run('chunks', (s) => s.put(blob, id + ':' + seq)),
+    delChunk: (id, seq) => run('chunks', (s) => s.delete(id + ':' + seq)),
+    putRec: (m) => run('recs', (s) => s.put(m, m.id)),
+    async delRec(id) { await run('chunks', (s) => s.delete(range(id))); await run('recs', (s) => s.delete(id)); },
+    async load() {
+      const out = [];
+      for (const m of (await run('recs', (s) => s.getAll())) || []) {
+        const keys = (await run('chunks', (s) => s.getAllKeys(range(m.id)))) || [];
+        const vals = (await run('chunks', (s) => s.getAll(range(m.id)))) || [];
+        const chunks = new Map();
+        keys.forEach((k, i) => { const seq = Number(String(k).split(':').pop()); if (vals[i] && Number.isFinite(seq)) chunks.set(seq, vals[i]); });
+        out.push({ meta: m, chunks });
+      }
+      return out;
+    },
+  };
+})();
+
+// ---------- Démarrage, arrêt ----------
+function closeWs() {
+  clearTimeout(wsTimer); wsTimer = null;
+  if (ws) { const s = ws; ws = null; wsOpen = false; try { s.close(); } catch (_) {} }
+}
+function badToken() {
+  want = false;
+  clearTimeout(directTimer); directTimer = null;
+  closeWs(); closeEncoder();
+  teardown();
+  status(T('Code expired'), 'bad');
+  overlay(T('This QR code is no longer valid. Scan the one Carnet shows on the computer right now.'));
+  buttons();
+}
+async function start(auto) {
+  if (!token) { overlay(T('Incomplete address: scan the QR code shown by Carnet on the computer.')); return; }
+  $('btnStart').disabled = true;
+  try { await openCamera(); }
+  catch (err) {
+    $('btnStart').disabled = false;
+    if (auto === true) return; // démarrage automatique refusé par le navigateur : il reste le bouton
+    status(T('Camera refused'), 'bad');
+    overlay(err.name === 'NotAllowedError'
+      ? T('The browser is not allowed to use the camera. Allow the camera for this page (icon to the left of the address), then try again.')
+      : T('The camera does not start ({name}). Close the other apps using it, then try again.', { name: err.name }));
+    return;
+  }
+  want = true;
+  mode = 'secours'; directAttempts = 0; directConfirm = 0;
+  wsFails = 0; transport = 'ws'; useJpeg = false; failedCodecs.clear(); encLevel = 0; upWait = 20000; quality = 0.78; forceKey = true; half = false; sideIdx = 0; slowWindows = 0;
+  overlay('');
+  buttons();
+  status(T('Connecting…'), 'warn');
+  requestWakeLock();
+  connectWs();
+  startFrames();
+  statusLoop();
+  tryDirect();
+}
+function stop() {
+  if (recCur) recStop('phone');
+  want = false;
+  clearTimeout(directTimer); directTimer = null;
+  closeWs(); closeEncoder();
+  teardown();
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  $('preview').srcObject = null;
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  status(T('Stopped'), '');
+  overlay(T('Camera stopped. Press <b>Start camera</b> to resume.'));
+  buttons();
+}
+function buttons() {
+  $('btnStart').disabled = false;
+  $('btnStart').classList.toggle('hidden', want);
+  $('btnFlip').classList.toggle('hidden', !want);
+  $('btnStop').classList.toggle('hidden', !want);
+  // While this phone records: no camera switch (it would cut the recording), and Stop ends the recording only.
+  $('btnFlip').disabled = !!recCur;
+  $('btnStop').textContent = recCur ? T('Stop recording') : T('Stop');
+}
+async function requestWakeLock() {
+  try { wakeLock = navigator.wakeLock ? await navigator.wakeLock.request('screen') : null; } catch (_) {}
+}
+async function recover() {
+  if (!want) return;
+  const t = stream && stream.getVideoTracks()[0];
+  if (!t || t.readyState !== 'live') {
+    // The camera was cut (page hidden, screen locked): a recording ends there; what it holds is sent.
+    if (recCur) recStop('interrupted');
+    try { await openCamera(); } catch (_) {}
+  }
+  forceKey = true;
+  startFrames();
+  if (!ws) connectWs();
+  if (transport === 'post') postLoop();
+  statusLoop();
+  if (!pc || pc.connectionState !== 'connected') { clearTimeout(directTimer); directTimer = null; tryDirect(); }
+}
+// Page cachée (autre onglet, autre appli, écran verrouillé) : le navigateur coupe la caméra ; on libère aussi la
+// connexion, pour qu'un onglet oublié en arrière-plan ne la dispute pas à celui qui filme. Tout repart au retour.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { requestWakeLock(); recover(); return; }
+  if (!want) return;
+  closeWs();
+  clearTimeout(directTimer); directTimer = null;
+  teardown();
+});
+// Filet de sécurité : si les images de la caméra ne sont plus suivies, on reprend.
+setInterval(() => { if (want && cameraLive() && performance.now() - lastStep > 1500) startFrames(); }, 1000);
+$('preview').addEventListener('resize', () => { if (want) sendFacing(); });
+$('btnStart').onclick = () => { audioReady(); start(false); };
+$('btnStop').onclick = () => { if (recCur) recStop('phone'); else stop(); };
+$('btnFlip').onclick = async () => {
+  if (recCur) return;
+  $('btnFlip').disabled = true;
+  const before = facing;
+  facing = facing === 'user' ? 'environment' : 'user';
+  try { await openCamera(); } catch (_) { facing = before; try { await openCamera(); } catch (_) {} }
+  if (want) startFrames();
+  $('btnFlip').disabled = false;
+};
+if (!token) overlay(T('Incomplete address: scan the QR code shown by Carnet on the computer.'));
+else {
+  // Carnet was already asking this phone to record when the page was served: the microphone opens with the camera.
+  if (I18N_.armed) { armed = true; armedAt = Date.now(); }
+  loadPending(); // a recording not fully sent before the page was closed or reloaded
+  // Page rechargée (nouvelle version de Carnet, ou rechargement à la main) : la caméra redémarre toute seule.
+  let auto = false;
+  try { auto = sessionStorage.getItem('carnet.autostart') === '1'; sessionStorage.removeItem('carnet.autostart'); } catch (_) {}
+  const nav = performance.getEntriesByType ? performance.getEntriesByType('navigation')[0] : null;
+  if (auto || (nav && nav.type === 'reload')) start(true);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src 'self' file: blob: mediastream:; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'">
+  <title>Carnet</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ===================== Journal screen ===================== -->
+  <div class="screen journal-screen" id="journalScreen">
+    <header class="topbar">
+      <div class="brand"><img class="logo-img" src="../../build/icon.png" alt="">Carnet</div>
+      <div class="j-search-wrap"><input type="text" id="jSearch" class="j-search" placeholder="Search the journal: a word, a subject, a person" spellcheck="false"></div>
+      <div class="top-actions">
+        <span class="j-chip hidden" id="jChip"></span>
+        <button class="btn" id="btnJImport" title="Add videos you already made">Import</button>
+        <button class="btn" id="btnJSettings">Settings</button>
+        <button class="btn record-cta" id="btnJNew" title="Record a new entry (N)"><span class="dot"></span>New entry</button>
+      </div>
+    </header>
+    <div class="j-body">
+      <aside class="j-side">
+        <nav class="j-nav">
+          <button class="nav-item" data-nav="prep">Before you talk</button>
+          <button class="nav-item" data-nav="you">You</button>
+          <button class="nav-item" data-nav="progress">Progress <span class="n" id="jNavProgressN"></span></button>
+          <button class="nav-item" data-nav="semaines">Weeks <span class="n" id="jNavSemainesN"></span></button>
+          <button class="nav-item" data-nav="precisions">Clarifications <span class="n" id="jNavPrecisionsN"></span></button>
+          <button class="nav-item" data-nav="sujets">All subjects <span class="n" id="jNavSujetsN"></span></button>
+        </nav>
+        <h2>Open subjects</h2>
+        <ul class="j-months j-subjects" id="jSubjects"></ul>
+        <h2>Videos</h2>
+        <ul class="j-months" id="jMonths"></ul>
+        <div class="j-side-foot">
+          <button class="link-btn" id="btnJOpenMd">Open Journal.md</button>
+          <button class="link-btn" id="btnJOpenDir">Open the journal folder</button>
+          <button class="link-btn" id="btnJOpenExports">Open the exports folder</button>
+          <button class="link-btn" id="btnJOpenInstr">Edit the instructions</button>
+          <button class="link-btn" id="btnJRecs">Recordings</button>
+          <button class="link-btn" id="btnJDataExport">Export all data</button>
+        </div>
+      </aside>
+      <main class="j-main" id="jMain"></main>
+    </div>
+  </div>
+
+  <!-- ===================== Editor screen ===================== -->
+  <div class="screen editor-screen hidden" id="editorScreen">
+  <header class="topbar">
+    <button class="btn" id="btnBackJournal" title="Back to the journal">← Journal</button>
+    <div class="title-wrap">
+      <input type="text" id="titleInput" class="title-input" placeholder="Video title" spellcheck="false" disabled title="Title used for the name of the exported file">
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="btnNew" title="Record a new video with the camera (N)">New video</button>
+      <button class="btn" id="btnOpen">Open</button>
+      <button class="btn" id="btnExport" disabled title="Export the MP4 wherever you want, without adding it to the journal">Export…</button>
+      <button class="btn primary" id="btnAddJournal" disabled title="Save the video in the journal folder and add it to the journal">Add to the journal</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="viewer">
+      <div class="stage" id="stage">
+        <video id="srcVideo" preload="auto"></video>
+        <video id="clipVideo" preload="auto" class="back"></video>
+        <div class="empty" id="empty">
+          <p class="empty-title">Open a video or record a new one</p>
+          <p class="muted">you can also drop a file here</p>
+          <div class="empty-actions">
+            <button class="btn primary" id="btnOpenEmpty">Open a video</button>
+            <button class="btn record" id="btnNewEmpty"><span class="dot"></span>New video</button>
+          </div>
+        </div>
+        <div class="badge hidden" id="clipBadge">Inserted clip</div>
+        <div class="chapter-now hidden" id="chapterNow"></div>
+        <div class="stamp hidden" id="clipStamp"></div>
+      </div>
+      <div class="transport">
+        <button class="icon-btn" id="btnBack" title="Back 5 s">
+          <svg viewBox="0 0 24 24"><path d="M11 6 5 12l6 6V6zm8 0-6 6 6 6V6z"/></svg>
+        </button>
+        <button class="icon-btn play" id="btnPlay" title="Play / Pause (Space)">
+          <svg viewBox="0 0 24 24" id="icoPlay"><path d="M8 5v14l11-7z"/></svg>
+          <svg viewBox="0 0 24 24" id="icoPause" class="hidden"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>
+        </button>
+        <button class="icon-btn" id="btnFwd" title="Forward 5 s">
+          <svg viewBox="0 0 24 24"><path d="M13 6v12l6-6-6-6zM5 6v12l6-6-6-6z"/></svg>
+        </button>
+        <div class="time"><span id="tCur">0:00.0</span> / <span id="tTotal">0:00.0</span></div>
+        <div class="sep"></div>
+        <button class="btn tool" id="btnScissors" disabled title="Scissors: delete a part (C)">
+          <svg viewBox="0 0 24 24"><path d="M9.6 8.1A3.5 3.5 0 1 0 8 9.7l2.3 2.3L8 14.3a3.5 3.5 0 1 0 1.6 1.6l2.4-2.4 6.6 6.6H22L9.6 8.1zM6 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm0 11a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm6-7.5a.5.5 0 1 1 0 1 .5.5 0 0 1 0-1zM18.6 4 13 9.6l2 2L22 4.5V4z"/></svg>
+          <span>Scissors</span>
+        </button>
+        <button class="btn tool" id="btnChapter" disabled title="Add a chapter at the playhead (M)">
+          <svg viewBox="0 0 24 24"><path d="M6 3h2v18H6zm3 1h10l-2.5 4L19 12H9z"/></svg>
+          <span>Chapter</span>
+        </button>
+        <div class="spacer"></div>
+        <button class="btn record" id="btnRecord" disabled title="Record a clip here (R)">
+          <span class="dot"></span><span>Insert a clip here</span>
+        </button>
+      </div>
+      <div class="cutbar hidden" id="cutBar">
+        <span class="muted small">Cut:</span>
+        <button class="btn" id="btnMarkIn" title="Start of the cut at the playhead (I)">Start here</button>
+        <button class="btn" id="btnMarkOut" title="End of the cut at the playhead (O)">End here</button>
+        <span class="muted small" id="selInfo"></span>
+        <div class="spacer"></div>
+        <button class="btn danger-fill hidden" id="btnCut" title="Delete the selected part (Del)">Delete the part</button>
+      </div>
+    </section>
+
+    <aside class="side">
+      <h2>Inserted clips</h2>
+      <ul class="clip-list" id="clipList"></ul>
+      <p class="muted small" id="clipEmpty">No clips. Pause the video at the right moment, then click “Insert a clip here”.</p>
+
+      <div class="props hidden" id="props">
+        <h2>Selected clip</h2>
+        <div class="row"><span class="muted">Duration</span><span id="pDur"></span></div>
+        <label class="field"><span>Position in the video</span>
+          <input type="text" id="pAt" spellcheck="false">
+        </label>
+        <button class="btn block" id="btnMoveHere">Move to the playhead</button>
+        <button class="btn block" id="btnEditClip">Trim the clip</button>
+        <button class="btn block danger" id="btnDeleteClip">Delete the clip</button>
+      </div>
+
+      <div class="chapters hidden" id="chaptersBox">
+        <h2>Chapters</h2>
+        <ul class="chapter-list" id="chapterList"></ul>
+      </div>
+
+      <div class="cuts hidden" id="cutsBox">
+        <div class="cuts-head"><h2>Deleted parts</h2><button class="btn small-btn hidden" id="btnRestoreSilences">Put the silences back</button></div>
+        <ul class="cut-list" id="cutList"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="timeline-area">
+    <div class="ruler" id="ruler"></div>
+    <div class="chapter-row" id="chapterRow"></div>
+    <div class="timeline" id="timeline">
+      <div class="track" id="track"></div>
+      <div class="silences" id="silences"></div>
+      <div class="cut-sel hidden" id="cutSel"></div>
+      <div class="playhead" id="playhead"></div>
+      <div class="hover-tip hidden" id="hoverTip"></div>
+      <div class="wave-msg hidden" id="waveMsg">Analysing the sound…</div>
+    </div>
+  </footer>
+  </div>
+
+  <!-- Recording and trimming window -->
+  <div class="modal studio hidden" id="modal">
+    <div class="dialog">
+      <div class="dialog-head">
+        <h2 id="modalTitle">Record a clip</h2>
+        <span class="muted small" id="modalAt"></span>
+      </div>
+
+      <div id="stepRecord">
+        <div class="rec-layout">
+        <div class="cam-wrap">
+          <video id="camVideo" autoplay muted playsinline></video>
+          <div class="rec-indicator hidden" id="recIndicator"><span class="dot"></span><span id="recTime">0:00</span></div>
+          <div class="cam-msg hidden" id="camMsg"></div>
+          <div class="countdown hidden" id="countdown"></div>
+          <div class="cam-stamp" id="camStamp"></div>
+          <div class="cam-mode hidden" id="phoneMode">Fallback mode</div>
+          <button class="btn notes-show hidden" id="btnNotesShow" title="Show your notes">Notes</button>
+          <div class="phone-panel hidden" id="phonePanel">
+            <div class="pp-qr" id="phoneQr"></div>
+            <div class="pp-text">
+              <h3>Use your phone as a camera</h3>
+              <ol>
+                <li data-i18n-html>Put the phone on the <b>same Wi-Fi</b> as the computer. If Windows asks whether to allow Carnet on the network, accept.</li>
+                <li>Scan this QR code with the phone’s camera.</li>
+                <li data-i18n-html>The first time, the browser warns that the connection is “not private”: tap <b>Show Details</b> (iPhone) or <b>Advanced</b> (Android), then <b>visit this website</b> or <b>Proceed</b>. This is normal: the page comes from your computer, not from the Internet.</li>
+                <li data-i18n-html>Tap <b>Start camera</b>. Then choose below who records: the phone (picture and sound at full quality) or this computer.</li>
+              </ol>
+              <p class="small muted" id="phoneUrl"></p>
+              <p class="small" id="phoneStatus"></p>
+              <div class="pp-diag hidden" id="phoneDiag">
+                <b>The video does not get through between the phone and the computer.</b>
+                <p id="phoneDiagText"></p>
+                <div class="pp-actions"><button class="btn small-btn" id="btnPhoneFirewall2">Allow Carnet in the firewall</button><button class="btn small-btn" id="btnPhoneDiagCopy">Copy the technical details</button></div>
+              </div>
+              <div class="pp-help hidden" id="phoneHelp">
+                <b>The phone does not reach the computer?</b>
+                <ul>
+                  <li data-i18n-html>Check that both are on the <b>same Wi-Fi</b> (not the phone’s 4G/5G, not a “guest” network).</li>
+                  <li><span>The Windows firewall may be blocking Carnet:</span> <button class="btn small-btn" id="btnPhoneFirewall">Allow Carnet in the firewall</button> <span class="muted small">(Windows asks for confirmation)</span></li>
+                  <li>If the page opens on the phone but stays stuck, close the tab and scan the QR code again.</li>
+                </ul>
+              </div>
+              <div class="pp-actions"><button class="btn small-btn" id="btnPhoneNewCode" title="The old QR code will stop working">New QR code</button><button class="btn small-btn hidden" id="btnPhoneBack">Back to the webcam</button></div>
+            </div>
+          </div>
+          <div class="cam-banner hidden" id="phoneWarn"></div>
+        </div>
+        <aside class="notes hidden" id="notesPanel">
+          <div class="notes-head">
+            <select id="notesSubject" title="Subject you are going to talk about"></select>
+            <button class="icon-btn" id="btnNotesHide" title="Hide the notes"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" fill="none"/></svg></button>
+          </div>
+          <div class="notes-body" id="notesBody"></div>
+        </aside>
+        </div>
+        <div class="device-row">
+          <label class="field"><span>Camera</span><span class="cam-pick"><select id="selCam"></select><span class="rotate-btns hidden" id="rotateBtns"><button class="btn icon-btn" id="btnRotL" title="Rotate the picture a quarter turn to the left"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="btn icon-btn" id="btnRotR" title="Rotate the picture a quarter turn to the right"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button><span class="small muted" id="rotLabel"></span></span></span></label>
+          <label class="field hidden" id="recByField" title="The phone: it records the picture and the sound itself, at its full quality, and sends the file to the computer as it goes. This computer: it records the picture it receives, with its own microphone."><span>Recorded by</span><select id="selRecBy"><option value="phone">The phone (best quality)</option><option value="pc">This computer</option></select></label>
+          <label class="field" id="qualityField" title="Light: for a computer that cannot compress the video fast enough (the preview is smooth but the recording jerky)."><span>Quality</span><select id="selQuality"><option value="full">Full: up to 1080p, 60 fps</option><option value="light">Light: 720p, 30 fps</option></select></label>
+          <label class="field"><span>Microphone</span><select id="selMic"></select></label>
+          <div class="meter"><div id="meterBar"></div></div>
+        </div>
+        <p class="small warn hidden" id="micWarn">Microphone unavailable: the recording will have no sound. Pick another microphone in the list.</p>
+        <p class="small muted hidden" id="recByHint">Recorded by the phone: picture and sound at full quality. Keep the Carnet page on screen on the phone until it says the recording is sent.</p>
+      </div>
+
+      <div id="stepWait" class="hidden">
+        <div class="rec-wait">
+          <h3>Receiving the recording from the phone…</h3>
+          <p class="small hidden" id="waitNotice"></p>
+          <div class="progress"><div id="waitBar"></div></div>
+          <p class="small muted" id="waitMsg"></p>
+          <p class="small warn hidden" id="waitWarn"></p>
+          <div class="rec-fail-actions"><button class="btn hidden" id="btnWaitUse" title="Prepares what has reached the computer now. If the rest arrives later, the complete version will be in “Recordings”.">Use what has arrived</button></div>
+        </div>
+      </div>
+
+      <div id="stepTrim" class="hidden">
+        <div class="cam-wrap"><video id="trimVideo" playsinline></video></div>
+        <div class="trim">
+          <div class="trim-bar" id="trimBar">
+            <div class="trim-sel" id="trimSel"></div>
+            <div class="trim-handle" id="hIn"></div>
+            <div class="trim-handle" id="hOut"></div>
+            <div class="trim-head" id="trimHead"></div>
+          </div>
+          <div class="trim-info">
+            <button class="icon-btn" id="btnTrimPlay" title="Play the selection">
+              <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <span class="muted small"><span>From</span> <b id="tIn"></b> · <span>To</span> <b id="tOut"></b> · <span>Length</span> <b id="tLen"></b></span>
+            <div class="spacer"></div>
+            <label class="field inline" id="insertAtField"><span>Insert at</span> <input type="text" id="insertAt" spellcheck="false"></label>
+          </div>
+        </div>
+        <p class="small warn hidden" id="fpsWarn"></p>
+      </div>
+
+      <div id="stepFail" class="hidden">
+        <div class="rec-fail">
+          <h3>The recording is kept, but could not be prepared</h3>
+          <p id="recFailMsg"></p>
+          <p class="muted small">It is not lost: it stays on the disk. You can try again, save a copy wherever you want, or close and find it later in “Recordings”.</p>
+          <div class="rec-fail-actions">
+            <button class="btn primary" id="btnFailRetry">Try again</button>
+            <button class="btn" id="btnFailCopy">Save a copy…</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="dialog-foot">
+        <button class="btn" id="btnCancel">Cancel</button>
+        <div class="spacer"></div>
+        <button class="btn hidden" id="btnSaveCopy" title="Exact copy of the recorded file, wherever you want, without waiting">Save a copy…</button>
+        <button class="btn hidden" id="btnRetake">Start over</button>
+        <button class="btn record" id="btnRecToggle"><span class="dot"></span><span id="recLabel">Start</span></button>
+        <button class="btn primary hidden" id="btnOk">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Kept recordings -->
+  <div class="modal hidden" id="recoverModal">
+    <div class="dialog">
+      <div class="dialog-head"><h2>Recordings</h2><span class="muted small">kept on the disk, not used yet in an export or the journal</span></div>
+      <div class="recover-list" id="recoverList"></div>
+      <div class="dialog-foot"><span class="muted small">Deleted recordings are kept for 7 days.</span><div class="spacer"></div><button class="btn" id="btnRecoverClose">Close</button></div>
+    </div>
+  </div>
+
+  <!-- Export -->
+  <div class="modal hidden" id="exportModal">
+    <div class="dialog small-dialog">
+      <h2 id="exportTitle">Exporting</h2>
+      <div class="progress"><div id="exportBar"></div></div>
+      <p class="muted small" id="exportMsg">0 %</p>
+      <div class="dialog-foot">
+        <button class="btn danger hidden" id="btnExportCancel">Cancel</button>
+        <div class="spacer"></div>
+        <button class="btn hidden" id="btnShowFile">Show in folder</button>
+        <button class="btn primary hidden" id="btnExportClose">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <!-- Settings -->
+  <div class="modal hidden" id="settingsModal">
+    <div class="dialog settings-dialog">
+      <div class="set-head">
+        <div class="dialog-head"><h2>Settings</h2><button class="icon-btn" id="btnSettingsClose" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" fill="none"/></svg></button></div>
+        <nav class="set-nav" id="setNav">
+          <button class="chip" data-sec="setJournalSec">Journal folder</button>
+          <button class="chip" data-sec="setTxSec">Transcription</button>
+          <button class="chip" data-sec="setGeminiSec">Gemini</button>
+          <button class="chip" data-sec="setRecSec">Recording</button>
+          <button class="chip" data-sec="setReminderSec">Reminder</button>
+          <button class="chip" data-sec="setLangSec">Language</button>
+          <button class="chip" data-sec="setDataSec">Export all data</button>
+        </nav>
+      </div>
+
+      <section class="set-sec" id="setJournalSec">
+        <h3>1. Journal folder</h3>
+        <p class="muted small" data-i18n-html>All the journal videos, <b>Journal.md</b>, the transcripts and the instructions file are kept here.</p>
+        <div class="set-row"><span class="path" id="setDir">No folder chosen</span><button class="btn" id="btnSetDir">Choose…</button></div>
+        <p class="muted small">The journal videos go into a subfolder, named with their date and the title Gemini found.</p>
+        <h3>Exports folder</h3>
+        <p class="muted small">Videos made with “Export…” go here, apart from the journal.</p>
+        <div class="set-row"><span class="path" id="setExportDir"></span><button class="btn" id="btnSetExportDir">Choose…</button></div>
+      </section>
+
+      <section class="set-sec" id="setTxSec">
+        <h3>2. Transcription</h3>
+        <label class="radio"><input type="radio" name="txMode" value="gemini"> <span data-i18n-html><b>Gemini</b> · fast: the sound is sent to Google along with the request for the card (a single call per video)</span></label>
+        <label class="radio"><input type="radio" name="txMode" value="whisper"> <span data-i18n-html><b>whisper, on this computer</b> · slow on a modest laptop, but the sound never leaves the computer</span></label>
+        <div id="setWhisperBox" class="hidden">
+        <div id="setWhisperOk" class="set-row hidden"><span id="setWhisperInfo"></span></div>
+        <div id="setWhisperInstall">
+          <label class="radio"><input type="radio" name="wModel" value="rapide" checked> <span data-i18n-html><b>Fast</b> · 60 MB · recommended for a modest laptop</span></label>
+          <label class="radio"><input type="radio" name="wModel" value="precis"> <span data-i18n-html><b>Accurate</b> · 190 MB · better text, about 3 times slower</span></label>
+          <div class="progress hidden" id="wInstallBar"><div id="wInstallFill"></div></div>
+          <p class="muted small" id="wInstallMsg"></p>
+          <button class="btn" id="btnWInstall">Install</button>
+        </div>
+        </div>
+      </section>
+
+      <section class="set-sec" id="setGeminiSec">
+        <h3>3. Analysis and organisation (Gemini)</h3>
+        <p class="muted small" data-i18n-html>Create a free key at <b>aistudio.google.com/apikey</b> and paste it here. With transcription by Gemini, the sound of each entry (not the picture) is sent to Google; with whisper, only the text. With a free key, Google may use what it receives to improve its products: do not record what you do not want to share.</p>
+        <div class="set-row"><input type="password" id="setKey" placeholder="Gemini API key" spellcheck="false" autocomplete="off"><button class="btn" id="btnSetKey">Save</button></div>
+        <p class="small" id="setKeyMsg"></p>
+        <div class="set-row tier-row hidden" id="setTierRow"><span class="small" id="setTier"></span><button class="btn small-btn" id="btnSetTier" title="Sends one tiny request to Gemini to find out whether the key is free or paid">Check</button></div>
+        <div class="set-grid">
+          <label class="field"><span>Model</span><select id="setModel"></select></label>
+          <label class="field"><span>Calls per day</span><input type="text" id="setBudget" inputmode="numeric"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="setAutoSemaine"> <span>Make the summary of each finished week automatically</span></label>
+        <label class="check"><input type="checkbox" id="setAutoBilan"> <span>Redo the summary automatically when there are new videos (at most once a day)</span></label>
+        <p class="muted small" id="setUsage"></p>
+      </section>
+
+      <section class="set-sec" id="setRecSec">
+        <h3>Recording</h3>
+        <div class="set-grid set-grid-2">
+          <label class="field"><span>With the phone as camera, recorded by</span><select id="setRecBy"><option value="phone">The phone (best quality)</option><option value="pc">This computer</option></select></label>
+          <label class="field"><span>Quality when this computer records</span><select id="setQuality"><option value="full">Full: up to 1080p, 60 fps</option><option value="light">Light: 720p, 30 fps</option></select></label>
+        </div>
+        <p class="muted small">The phone records the picture and the sound itself, at its full quality, and sends the file to the computer as it goes: the speed of this computer does not matter. Light quality is for a computer that cannot compress the video fast enough (the preview is smooth but the recording jerky); Carnet turns it on by itself when a recording loses too many frames. Both choices are also in the recording window.</p>
+      </section>
+
+      <section class="set-sec" id="setReminderSec">
+        <h3>Daily reminder</h3>
+        <div class="set-row reminder-row"><label class="check"><input type="checkbox" id="setReminderOn"> <span>Remind me every day at</span></label><input type="time" id="setReminderTime" value="20:00"><div class="spacer"></div><button class="btn small-btn" id="btnReminderTest" title="Shows today’s notification now">Try it</button></div>
+        <p class="muted small">A Windows notification with what there is to check: a realization or something you left behind whose time has come, a look-back, a subject that stopped coming up. When there is nothing to check, where you stood a month ago. Clicking it opens Carnet.</p>
+        <p class="muted small">While the reminder is on, Carnet starts with Windows without opening its window, and stays in the notification area, next to the clock, when you close it. To quit it, right-click its icon there.</p>
+      </section>
+
+      <section class="set-sec" id="setLangSec">
+        <h3>Language</h3>
+        <div class="set-row"><select id="setLang"></select></div>
+        <p class="muted small">The language of Carnet and of what Gemini writes. Transcripts stay in the language you speak.</p>
+      </section>
+
+      <section class="set-sec" id="setDataSec">
+        <h3>Export all data</h3>
+        <p class="muted small">Everything Carnet knows about your journal, in a single file: readable text, raw data, or an archive with the videos.</p>
+        <button class="btn" id="btnSetDataExport">Export all data…</button>
+      </section>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="dataModal">
+    <div class="dialog data-dialog">
+      <div class="dialog-head"><h2>Export all data</h2><span class="muted small" id="dataInfo"></span></div>
+      <div class="data-choices" id="dataChoices">
+        <label class="data-choice"><input type="radio" name="dataFormat" value="texte" checked>
+          <span><b>A single text file</b> <span class="muted">(.md)</span><br><span class="small muted">The whole journal, readable with any editor: weeks, summaries, subjects and how they changed, video cards, full transcripts, what Carnet knows about you, settings and instructions. The videos are not included.</span></span></label>
+        <label class="data-choice"><input type="radio" name="dataFormat" value="json">
+          <span><b>A single data file</b> <span class="muted">(.json)</span><br><span class="small muted">All of Carnet’s raw data, to reuse in another tool or keep as a backup. The videos are not included.</span></span></label>
+        <label class="data-choice"><input type="radio" name="dataFormat" value="zip">
+          <span><b>An archive</b> <span class="muted">(.zip)</span><br><span class="small muted">The text file, the data file and the instructions, plus, if you want:</span>
+            <span class="data-opts">
+              <label class="check"><input type="checkbox" id="dataVideos" checked> <span id="dataVideosLabel">Journal videos</span></label>
+              <label class="check"><input type="checkbox" id="dataRecs"> <span id="dataRecsLabel">Kept recordings</span></label>
+            </span></span></label>
+      </div>
+      <div class="data-progress hidden" id="dataProgress"><div class="progress"><div class="progress-bar" id="dataBar"></div></div><p class="small muted" id="dataProgressText"></p></div>
+      <p class="small muted">The Gemini key is never exported.</p>
+      <div class="dialog-foot"><button class="btn" id="btnDataCancel">Cancel</button><div class="spacer"></div><button class="btn primary" id="btnDataGo">Export…</button></div>
+    </div>
+  </div>
+
+  <!-- Then and now: the two moments of a step forward -->
+  <div class="modal hidden" id="thenNowModal">
+    <div class="dialog tn-dialog">
+      <div class="dialog-head"><h2 id="tnTitle"></h2><button class="icon-btn" id="btnTnClose" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" fill="none"/></svg></button></div>
+      <p class="tn-text" id="tnText"></p>
+      <div class="tn-grid">
+        <div class="tn-side"><div class="tn-label" id="tnThenLabel"></div><video id="tnThen" controls preload="metadata"></video><p class="tn-ctx" id="tnThenCtx"></p><button class="link-btn" id="tnThenOpen">Open the card of this video</button></div>
+        <div class="tn-side now"><div class="tn-label" id="tnNowLabel"></div><video id="tnNow" controls preload="metadata"></video><p class="tn-ctx" id="tnNowCtx"></p><button class="link-btn" id="tnNowOpen">Open the card of this video</button></div>
+      </div>
+      <div class="dialog-foot"><button class="btn" id="btnTnBoth" title="Ten seconds of the first moment, then the second one">Play one after the other</button><div class="spacer"></div><button class="btn" id="btnTnClose2">Close</button></div>
+    </div>
+  </div>
+
+  <!-- Progress reel -->
+  <div class="modal hidden" id="reelModal">
+    <div class="dialog small-dialog">
+      <h2>Progress reel</h2>
+      <p class="muted small">One video with your steps forward: for each one, a card with what it is, the moment it started and the moment it happened. Ten steps at most. It is saved in the exports folder.</p>
+      <label class="field"><span>Period</span><select id="reelPeriod"><option value="3">The last 3 months</option><option value="6">The last 6 months</option><option value="12">The last 12 months</option><option value="0">Everything</option></select></label>
+      <p class="small" id="reelCount"></p>
+      <div class="dialog-foot"><button class="btn" id="btnReelCancel">Cancel</button><div class="spacer"></div><button class="btn primary" id="btnReelGo">Make the reel</button></div>
+    </div>
+  </div>
+
+  <div class="busy hidden" id="busy"><div class="busy-box" id="busyMsg">Loading…</div></div>
+
+  <script src="../i18n/index.js"></script>
+  <script src="../i18n/fr.js"></script>
+  <script src="../i18n/es.js"></script>
+  <script src="../i18n/de.js"></script>
+  <script src="i18n-init.js"></script>
+  <script src="phonecam.js"></script>
+  <script src="app.js"></script>
+  <script src="journal-ui.js"></script>
+</body>
+</html>

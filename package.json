@@ -1,0 +1,76 @@
+{
+  "name": "carnet",
+  "productName": "Carnet",
+  "version": "0.1.0",
+  "description": "Video journal that works as a second brain: talk to the camera, Carnet transcribes, follows your subjects from one video to the next and keeps what you say about yourself.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "fr.chef.carnet",
+    "productName": "Carnet",
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "include": "build/installer.nsh",
+      "shortcutName": "Carnet",
+      "artifactName": "Carnet-Setup-${version}.${ext}"
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "mp4",
+          "mov",
+          "mkv",
+          "webm",
+          "avi",
+          "m4v"
+        ],
+        "name": "Video",
+        "description": "Video",
+        "role": "Editor",
+        "icon": "build/icon.ico"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Carnet",
+        "schemes": [
+          "carnet",
+          "raccord"
+        ]
+      }
+    ]
+  },
+  "author": "Chef",
+  "license": "GPL-3.0-or-later"
+}

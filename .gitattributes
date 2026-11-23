@@ -1,0 +1,5 @@
+# Text files with LF in the repository; the Windows scripts keep CRLF so that cmd reads them correctly.
+* text=auto
+*.bat text eol=crlf
+*.ico binary
+*.png binary
