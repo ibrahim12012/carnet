@@ -8,15 +8,17 @@ Carnet is a tool first. It records, files and reminds you of what you said. It d
 
 Before recording, you can pick a subject: your notes on it stay next to the camera while you talk.
 
+Carnet runs on Windows and on macOS (Apple Silicon and Intel): see **Install on Windows** and **Install on a Mac** below.
+
 ## Getting started
 
 On first launch, the "To get started" card offers two steps (also in **Settings**):
-1. **Journal folder**: the journal videos (subfolder `Journal videos`), `Journal.md`, the transcripts and the instructions are kept there. Videos made with **Export…** go to a separate folder (by default `Videos\Carnet - Exports`, changeable in **Settings**).
-2. **Gemini key**: a free key from aistudio.google.com/apikey. It is checked, then saved encrypted with your Windows account.
+1. **Journal folder**: the journal videos (subfolder `Journal videos`), `Journal.md`, the transcripts and the instructions are kept there. Videos made with **Export…** go to a separate folder (by default `Videos\Carnet - Exports`, `Movies/Carnet - Exports` on a Mac, changeable in **Settings**).
+2. **Gemini key**: a free key from aistudio.google.com/apikey. It is checked, then saved encrypted with your Windows account (on a Mac, in your keychain).
 
 **Transcription** (Settings):
 - **Gemini** (default): the sound of the video (mono, compressed, about 2 MB for 10 minutes) is sent with the request for the card. One call does both the transcript and the card. Fast, but the timings are less precise than with whisper.
-- **whisper, on this computer**: free and offline, but slow on a modest laptop. **Fast** model (60 MB) or **Accurate** (190 MB). The spoken language is detected.
+- **whisper, on this computer**: free and offline, but slow on a modest laptop. **Fast** model (60 MB) or **Accurate** (190 MB). The spoken language is detected. On a Mac, whisper comes with Carnet (and uses the graphics chip on Apple Silicon); only the model is downloaded.
 
 Privacy: the picture never leaves the computer. With Gemini, the sound is sent to Google; with whisper, only the text. With a free key, Google may use what it receives to improve its products.
 
@@ -89,7 +91,7 @@ A subject discussed in at least 3 videos that has not come up for 4 weeks, while
 
 **Progress reel**: one MP4 in the exports folder, named `DD-MM-YY HHhMM Progress reel.mp4`: for each step forward of the period (10 at most, those with both moments first), a card with what it is, then 7 seconds of the moment it started and 10 seconds of the moment it happened, with "Then" and "Now" and the date on the picture. Made on the computer, no Gemini call. **Cancel** stops it.
 
-**Daily reminder** (Settings > Reminder, off by default): once a day at the chosen time, a Windows notification with what there is to check, a look-back, or a subject that stopped coming up; when there is nothing to check, where you stood a month ago on a subject. A click opens Carnet on Before you talk. If the computer is asleep at that time, it shows when it wakes up, up to 6 hours later. While the reminder is on, Carnet starts with Windows without opening its window and stays in the notification area when you close the window (right-click its icon to quit). **Try it** shows the notification of today right away.
+**Daily reminder** (Settings > Reminder, off by default): once a day at the chosen time, a notification with what there is to check, a look-back, or a subject that stopped coming up; when there is nothing to check, where you stood a month ago on a subject. A click opens Carnet on Before you talk. If the computer is asleep at that time, it shows when it wakes up, up to 6 hours later. While the reminder is on, Carnet starts with Windows without opening its window and stays in the notification area when you close the window (right-click its icon to quit). On a Mac, it opens at login without its window, with an icon in the menu bar (click it to open or quit Carnet); macOS asks once whether Carnet may send notifications. **Try it** shows the notification of today right away.
 
 ### Clarifications
 
@@ -189,9 +191,9 @@ How the phone sends its recording, so that nothing gets lost:
 - **Phone held sideways**: the ↺ and ↻ buttons next to the **Camera** list rotate the picture a quarter turn. Useful when the phone's rotation lock is on (the picture then arrives lying down). The rotation is kept for the next recordings; it is set before starting, not during.
 - Recorded by this computer, if the phone disconnects during a recording, the recording goes on with the computer's sound: a gap of less than 3 seconds just freezes the last picture, a longer one shows a waiting screen, and the picture comes back on its own when the phone reconnects. Recorded by the phone, the phone goes on recording by itself; only the preview is missing.
 - The QR code stays the same from one launch to the next: a tab left open on the phone reconnects on its own. **New QR code** replaces it (the old one stops working).
-- Under the QR code, Carnet says where the phone is at (page open, old QR code, page from an older version of Carnet to close and scan again, picture on its way). If the phone has not reached the computer after 25 seconds, help shows up, with **Allow Carnet in the firewall** (Windows asks for administrator confirmation; the rule applies to all network types, "Public" included).
+- Under the QR code, Carnet says where the phone is at (page open, old QR code, page from an older version of Carnet to close and scan again, picture on its way). If the phone has not reached the computer after 25 seconds, help shows up, with **Allow Carnet in the firewall** (Windows asks for administrator confirmation; the rule applies to all network types, "Public" included). On a Mac, the help says where to allow Carnet: **Privacy & Security > Local Network** in System Settings, and incoming connections in **Network > Firewall** if the firewall is on.
 
-How it works (same idea as [OmniCam](https://github.com/Orest-Z/OmniCam), MIT licence): Carnet serves a web page over HTTPS on the local network (port 28451, self-signed certificate kept in `%APPDATA%\Carnet\tls`, hence the warning the first time). The QR code holds the address of the page and a secret code, kept from one launch to the next; without it, the phone cannot connect. The phone opens its camera (and its microphone only when it records) and sends the picture straight to the computer: nothing goes through the Internet. The installer adds a Windows firewall rule for Carnet; without administrator rights, Windows asks the first time.
+How it works (same idea as [OmniCam](https://github.com/Orest-Z/OmniCam), MIT licence): Carnet serves a web page over HTTPS on the local network (port 28451, self-signed certificate kept in `%APPDATA%\Carnet\tls`, or `~/Library/Application Support/Carnet/tls` on a Mac, hence the warning the first time). The QR code holds the address of the page and a secret code, kept from one launch to the next; without it, the phone cannot connect. The phone opens its camera (and its microphone only when it records) and sends the picture straight to the computer: nothing goes through the Internet. The installer adds a Windows firewall rule for Carnet; without administrator rights, Windows asks the first time. On a Mac, macOS asks the first time whether Carnet may find devices on the local network: the direct video needs it.
 
 Two paths for the picture, chosen on their own:
 
@@ -205,7 +207,7 @@ Two paths for the picture, chosen on their own:
 - 60 frames per second: browsers tend to pick 1080p at 30 over 720p at 60, so once the camera is open, Carnet asks the same camera (phone or webcam) for at least 50 frames per second, without going below 720p. A camera that cannot do that stays at 30 (most laptop webcams).
 - **Jerky playback but a smooth preview** means the computer could not compress the video fast enough while recording: the preview only shows the camera, the recording also has to compress every frame. After each recording, Carnet compares the frames kept in the file with those the camera sent. If far fewer were kept, it says so and switches to light recording (720p at 30 frames per second; **Quality** under the picture, or **Settings > Recording**). With the phone as camera, **Recorded by: the phone** avoids the problem altogether: the phone compresses the video itself. Background work (whisper transcription, sound extraction) runs at a lower priority, drops to the lowest while you record, and no new job starts until the recording ends.
 - The phone shows its camera format at the top (for example 1920x1080 · 60 fps); Carnet's preview shows the path, size and frame rate actually received (for example "Direct · 1920x1080 · 60 fps").
-- During a recording (clip or new video), the video is written to the disk every second, in `%APPDATA%\Carnet\clips`. A long recording (an hour or more) does not fill the memory, and if Carnet is closed or crashes, what was filmed stays on the disk.
+- During a recording (clip or new video), the video is written to the disk every second, in `%APPDATA%\Carnet\clips` (`~/Library/Application Support/Carnet/clips` on a Mac). A long recording (an hour or more) does not fill the memory, and if Carnet is closed or crashes, what was filmed stays on the disk.
 - If Windows suddenly refuses to write during a recording (disk full, antivirus, permissions), the rest is written to a rescue folder (`Carnet - rescue`, in the temporary folder, Videos, Documents or the home folder), a message says so, and the pieces are joined when you stop. If no folder accepts writing, the recording goes on in memory and can be copied in full wherever you want.
 - If preparing fails after **Stop**, the recording is not thrown away: the window shows the cause, with **Try again** and **Save a copy…** (exact copy of the file, wherever you want, instantly).
 - While trimming, **Save a copy…** does the same, so you are never stuck adding a clip.
@@ -221,20 +223,44 @@ The recording window shows the cause and buttons to fix it:
 - **Compatible mode**: uses the old Windows camera driver (DirectShow), which fixes the problem on many built-in webcams. Carnet restarts to apply it.
 - Carnet takes the default Windows camera. If it does not answer, it takes any available camera. Another camera can be picked in the list.
 
+On a Mac, macOS asks before the first recording whether Carnet may use the camera and the microphone. If the answer was no, **macOS camera settings** opens System Settings > Privacy & Security > Camera: turn on Carnet, then quit and reopen it (same for the microphone, under Microphone). Close the other apps using the camera (FaceTime, Zoom, Teams, a browser). There is no compatible mode on a Mac.
+
 ## Install on Windows
 
 Requirement: Node.js LTS (https://nodejs.org).
 
-Double-click `build-windows.bat`. The installer is created in `dist\Carnet-Setup-0.1.0.exe`. The next times, `compiler.bat` only rebuilds the installer, without installing the dependencies again. Once installed, Carnet shows up in "Open with" for mp4, mov, mkv, webm, avi and m4v files.
+Double-click `build-windows.bat`. The installer is created in `dist\Carnet-Setup-<version>.exe`. The next times, `compiler.bat` only rebuilds the installer, without installing the dependencies again. Once installed, Carnet shows up in "Open with" for mp4, mov, mkv, webm, avi and m4v files.
 
 To run without installing (development): `npm install` then `npm start`.
 
+## Install on a Mac
+
+In the Releases of the GitHub page, take the disk image for your Mac: `Carnet-<version>-mac-arm64.dmg` for Apple Silicon (M1 and later), `Carnet-<version>-mac-x64.dmg` for an Intel Mac (Apple menu > About This Mac says which). Open it and drag Carnet into Applications.
+
+Carnet is not signed with an Apple developer account, so macOS blocks it the first time:
+1. Open Carnet from Applications. macOS says it cannot check it: click **Done** (or **OK**).
+2. In System Settings > Privacy & Security, at the bottom, next to "Carnet was blocked", click **Open Anyway**, then confirm with your password.
+
+Or, in Terminal (also the way out if macOS says Carnet "is damaged"): `xattr -dr com.apple.quarantine /Applications/Carnet.app`, then open Carnet normally.
+
+macOS then asks, each thing once: the camera and the microphone (first recording), the local network (phone as a camera), notifications (daily reminder), and the keychain, where the Gemini key is kept (**Always Allow**). After installing a new version, it may ask again. On a Mac, a closed window does not quit Carnet: it stays in the Dock (Cmd+Q quits).
+
+whisper is included in the Mac version. If it is missing (version built without it), Carnet says to install it with Homebrew: `brew install whisper-cpp`.
+
+### Build the Mac version
+
+On a Mac: Node.js LTS (https://nodejs.org) and Apple's command line tools (`xcode-select --install`); for whisper, cmake too (`brew install cmake`). Then, in Terminal, from the Carnet folder: `bash build-mac.sh`. The disk image is created in `dist/` (`-mac-arm64.dmg` on Apple Silicon, `-mac-x64.dmg` on Intel).
+
+Without a Mac, GitHub builds it: push a tag such as `v0.2.0` (`git tag v0.2.0` then `git push origin v0.2.0`). `.github/workflows/build.yml` then builds Windows and both Macs, and creates a draft release with the three files; check it and publish it on GitHub. **Run workflow** in the Actions tab builds the same files without a release (under Artifacts on the page of the run).
+
+The date on the clips and the progress reel need the drawtext filter of FFmpeg. If the GitHub build warns that the FFmpeg of a Mac version lacks it, that version exports without the date and cannot make the reel; everything else works.
+
 ## Structure
 
-- `src/main.js`: window, opening files, "Open with", recording clips, export, Gemini calls with retries and pauses, progress reel, daily reminder and notification area
+- `src/main.js`: window, opening files, "Open with", recording clips, export, Gemini calls with retries and pauses, progress reel, daily reminder and notification area (menu bar and menus on a Mac)
 - `src/render.js`: FFmpeg commands (analysis, conversion, assembly, progress reel)
 - `src/preload.js`: bridge between the interface and the system
-- `src/whisper.js`: installing and running whisper.cpp
+- `src/whisper.js`: installing and running whisper.cpp (downloaded on Windows, included or from Homebrew on a Mac)
 - `src/gemini.js`: requests to Gemini, error types, free or paid key, daily call counter
 - `src/journal.js`: journal data (videos, subjects, summaries, profile, progress, look-backs), requests sent to Gemini, Markdown files
 - `src/instructions-journal.md`: default instructions, copied into the journal folder
@@ -244,10 +270,11 @@ To run without installing (development): `npm install` then `npm start`.
 - `src/phonerec.js`: recordings made by the phone (pieces written in order and acknowledged, resuming after a cut, partial then complete version, rotation written in the MP4)
 - `src/vendor/qrcode.js`: QR code generation (Kazuhiko Arase, MIT licence)
 - `src/renderer/`: interface (HTML, CSS, JS)
-- `build/icon.svg`: the icon (a "C" with the red recording dot), exported to `icon.png` and `icon.ico` (a simpler drawing for 16 to 32 px)
+- `build/icon.svg`: the icon (a "C" with the red recording dot), exported to `icon.png` and `icon.ico` (a simpler drawing for 16 to 32 px); `build/icon-mac.svg`, the Mac icon (on a rounded square), exported to `icon.icns`; `trayTemplate.png` and `trayTemplate@2x.png`, the icon of the Mac menu bar
+- `build-windows.bat`, `compiler.bat`: Windows installer; `build-mac.sh`: Mac disk image; `.github/workflows/build.yml`: both, on GitHub
 - `DESIGN.md`: design rules
 
-Recorded clips are stored in `%APPDATA%\Carnet\clips`.
+Recorded clips are stored in `%APPDATA%\Carnet\clips` (`~/Library/Application Support/Carnet/clips` on a Mac).
 
 ## Licence
 

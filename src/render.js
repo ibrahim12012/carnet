@@ -27,6 +27,24 @@ function run(ffmpeg, args, onStderr, signal, onSpawn) {
   });
 }
 
+// Whether this FFmpeg can write text on the picture (drawtext filter: the date on the clips, the cards of the
+// progress reel). Some builds come without it. Asked once per FFmpeg; when the list cannot be read, it is assumed.
+const drawtextOf = new Map();
+function hasDrawtext(ffmpeg) {
+  if (!drawtextOf.has(ffmpeg)) {
+    drawtextOf.set(ffmpeg, new Promise((resolve) => {
+      let out = '';
+      let p;
+      try { p = spawn(ffmpeg, ['-hide_banner', '-filters'], { windowsHide: true }); } catch (_) { resolve(true); return; }
+      p.stdout.on('data', (d) => { out += d; });
+      p.stderr.on('data', () => {});
+      p.on('error', () => resolve(true));
+      p.on('close', () => resolve(!/\bscale\b/.test(out) || /\bdrawtext\b/.test(out)));
+    }));
+  }
+  return drawtextOf.get(ffmpeg);
+}
+
 // Lit durée, taille, fps, format vidéo et présence d'audio à partir de la sortie de "ffmpeg -i".
 async function probe(ffmpeg, file) {
   const { stderr } = await run(ffmpeg, ['-hide_banner', '-i', file]);
@@ -106,6 +124,8 @@ async function exportVideo(ffmpeg, { source, sourceInfo, clips = [], segments, c
   const W = even(sourceInfo.width), H = even(sourceInfo.height);
   const segs = (segments || buildSegments(sourceInfo.duration, clips)).filter((s) => s.end - s.start > 0.04);
   if (!segs.length) throw new Error(t('The final video is empty.'));
+  // Without drawtext, the clips keep no date on the picture (the export still works).
+  const canText = await hasDrawtext(ffmpeg);
   // Output frame rate: the highest among the video and the clips it uses (a clip filmed at 60 stays smooth in a
   // video at 30), rounded to the closest standard rate. A recording made in Carnet has a variable rate (one frame
   // per frame received from the phone): 57.3 on average gives 59.94, not a video at 57.3 frames per second.
@@ -142,7 +162,7 @@ async function exportVideo(ffmpeg, { source, sourceInfo, clips = [], segments, c
   const vIn = new Map(), aIn = new Map(); // indice du morceau -> étiquette de son flux découpé
   for (const [idx, list] of byInput) {
     const first = segs[list[0]];
-    const stamp = stampFilter(first.label || (first.clip && first.clip.label), fontFile);
+    const stamp = canText ? stampFilter(first.label || (first.clip && first.clip.label), fontFile) : '';
     const hasA = audioOf(first);
     parts.push(`[${idx}:v]${vfmt}${stamp}[n${idx}v]`);
     if (hasA) parts.push(`[${idx}:a]${afmt}[n${idx}a]`);
@@ -363,6 +383,7 @@ function cardFilter(lines, { W, H, F, duration, fontFile }) {
 // (video damaged) is left out.
 // parts: [{ type: 'card', lines, duration } | { type: 'clip', file, start, duration, hasAudio, label }]
 async function reel(ffmpeg, { parts, output, fontFile, onProgress, signal = null, W = 1280, H = 720, F = 30 }) {
+  if (!(await hasDrawtext(ffmpeg))) throw new Error(t('The FFmpeg included in this version of Carnet cannot write text on a picture (no drawtext filter), so the progress reel cannot be made.'));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'carnet-reel-'));
   const total = parts.reduce((s, p) => s + p.duration, 0) || 1;
   const enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-r', String(F), '-video_track_timescale', '15360',
@@ -413,4 +434,4 @@ async function reel(ffmpeg, { parts, output, fontFile, onProgress, signal = null
   }
 }
 
-module.exports = { run, extractVoice, parseChaptersText, waveform, probe, fixRecording, buildSegments, exportVideo, frameStats, wrapText, reel };
+module.exports = { run, extractVoice, parseChaptersText, waveform, probe, fixRecording, buildSegments, exportVideo, frameStats, wrapText, reel, hasDrawtext };

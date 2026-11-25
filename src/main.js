@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, session, shell, systemPreferences, net, Tray, Menu, Notification, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session, shell, systemPreferences, net, Tray, Menu, Notification, nativeImage, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -11,6 +11,7 @@ const { t, tn } = i18n;
 
 const ffmpeg = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
 const VIDEO_EXT = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'];
+const IS_MAC = process.platform === 'darwin';
 
 let win = null;
 // Caméra du téléphone (QR code, vidéo par Wi-Fi) : voir phonecam.js.
@@ -67,8 +68,8 @@ ipcMain.on('get-language', (e) => { e.returnValue = i18n.lang; });
 // - WebRtcHideLocalIpsWithMdns : la caméra du téléphone a besoin de la vraie adresse de l'ordinateur dans la
 //   connexion WebRTC ; masquée derrière un nom « .local », beaucoup de téléphones ne la trouvent pas et la
 //   vidéo ne passe jamais (comme dans OmniCam).
-// - MediaFoundationVideoCapture : mode compatible pour les webcams (Réglages caméra).
-app.commandLine.appendSwitch('disable-features', ['WebRtcHideLocalIpsWithMdns', ...(settings.compatCamera ? ['MediaFoundationVideoCapture'] : [])].join(','));
+// - MediaFoundationVideoCapture : mode compatible pour les webcams (Réglages caméra), sous Windows seulement.
+app.commandLine.appendSwitch('disable-features', ['WebRtcHideLocalIpsWithMdns', ...(settings.compatCamera && process.platform === 'win32' ? ['MediaFoundationVideoCapture'] : [])].join(','));
 
 function fileFromArgv(argv) {
   return argv.slice(1).find((a) => {
@@ -80,13 +81,16 @@ function fileFromArgv(argv) {
 // Police utilisée pour la date incrustée dans les clips.
 function findFont() {
   const winFonts = path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts');
-  const candidates = [
-    path.join(winFonts, 'segoeuib.ttf'),
-    path.join(winFonts, 'segoeui.ttf'),
-    path.join(winFonts, 'arial.ttf'),
-    '/System/Library/Fonts/Supplemental/Arial.ttf',
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-  ];
+  const candidates = process.platform === 'win32'
+    ? [path.join(winFonts, 'segoeuib.ttf'), path.join(winFonts, 'segoeui.ttf'), path.join(winFonts, 'arial.ttf')]
+    : [
+      // Mac (macOS 10.15 and later keep Arial in Supplemental), then Linux.
+      '/System/Library/Fonts/Supplemental/Arial Bold.ttf',
+      '/System/Library/Fonts/Supplemental/Arial.ttf',
+      '/Library/Fonts/Arial.ttf',
+      '/System/Library/Fonts/Helvetica.ttc',
+      '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    ];
   return candidates.find((f) => fs.existsSync(f)) || null;
 }
 
@@ -128,6 +132,8 @@ async function loadVideo(file) {
 
 const ICON = path.join(__dirname, '..', 'build', 'icon.png');
 function createWindow() {
+  // Mac: started at login for the reminder, Carnet was only in the menu bar; its window brings back the Dock icon.
+  if (IS_MAC && app.dock && !app.dock.isVisible()) { try { app.dock.show(); } catch (_) {} }
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -166,9 +172,86 @@ function showWindow(nav) {
 let pendingNav = null;
 ipcMain.handle('initial-nav', () => { const n = pendingNav; pendingNav = null; return n; });
 
-// Started with Windows for the daily reminder: no window until the person opens Carnet.
-const startedInBackground = process.argv.includes('--background');
+// Started with the computer for the daily reminder: no window until the person opens Carnet. Windows passes
+// --background; a Mac says whether it opened Carnet at login.
+function startedInBackground() {
+  if (process.argv.includes('--background')) return true;
+  if (!IS_MAC) return false;
+  try { return !!app.getLoginItemSettings().wasOpenedAtLogin; } catch (_) { return false; }
+}
 if (process.platform === 'win32') app.setAppUserModelId('fr.chef.carnet');
+
+// Mac: a video opened from the Finder (Open With, a double click) and a carnet:// link arrive as events, not in the
+// command line, sometimes before the app is ready.
+function openFromSystem(file, link) {
+  if (win && !win.isDestroyed()) {
+    const go = () => {
+      if (!win || win.isDestroyed()) return;
+      if (file) win.webContents.send('open-file', file);
+      if (link) win.webContents.send('open-entry', link);
+    };
+    showWindow();
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', go);
+    else go();
+    return;
+  }
+  if (file) pendingFile = file;
+  if (link) pendingLink = link;
+  if (app.isReady()) createWindow();
+}
+app.on('open-file', (e, file) => {
+  e.preventDefault();
+  if (VIDEO_EXT.includes(path.extname(file).slice(1).toLowerCase())) openFromSystem(file, null);
+});
+app.on('open-url', (e, url) => {
+  e.preventDefault();
+  const l = linkFromArgv([url]);
+  if (l) openFromSystem(null, l);
+});
+
+// Mac menu bar: the usual menus (copy and paste in the text fields go through the Edit menu), without Reload, which
+// would close the recording window.
+// The labels are those of macOS in each language ("Mac menu · Edit" in the dictionaries: "Edit" alone is already a
+// button of Carnet, translated differently).
+function menuT(label) {
+  const key = 'Mac menu · ' + label, v = t(key);
+  return v === key ? label : v;
+}
+function appMenu() {
+  if (!IS_MAC) return;
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: 'Carnet', submenu: [
+      { role: 'about', label: menuT('About Carnet') },
+      { type: 'separator' },
+      { role: 'hide', label: menuT('Hide Carnet') },
+      { role: 'hideOthers', label: menuT('Hide Others') },
+      { role: 'unhide', label: menuT('Show All') },
+      { type: 'separator' },
+      { role: 'quit', label: menuT('Quit Carnet') },
+    ] },
+    { label: menuT('Edit'), submenu: [
+      { role: 'undo', label: menuT('Undo') },
+      { role: 'redo', label: menuT('Redo') },
+      { type: 'separator' },
+      { role: 'cut', label: menuT('Cut') },
+      { role: 'copy', label: menuT('Copy') },
+      { role: 'paste', label: menuT('Paste') },
+      { role: 'selectAll', label: menuT('Select All') },
+    ] },
+    { label: menuT('View'), submenu: [
+      { role: 'resetZoom', label: menuT('Actual Size') },
+      { role: 'zoomIn', label: menuT('Zoom In'), accelerator: 'Command+=' },
+      { role: 'zoomOut', label: menuT('Zoom Out') },
+    ] },
+    { label: menuT('Window'), role: 'window', submenu: [
+      { role: 'minimize', label: menuT('Minimize') },
+      { role: 'zoom', label: menuT('Zoom') },
+      { role: 'close', label: menuT('Close Window') },
+      { type: 'separator' },
+      { role: 'front', label: menuT('Bring All to Front') },
+    ] },
+  ]));
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -196,14 +279,23 @@ if (!app.requestSingleInstanceLock()) {
     const allowed = ['media', 'mediaKeySystem', 'videoCapture', 'audioCapture'];
     session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(allowed.includes(perm)));
     session.defaultSession.setPermissionCheckHandler((_wc, perm) => allowed.includes(perm));
-    pendingFile = fileFromArgv(process.argv);
-    pendingLink = linkFromArgv(process.argv);
+    // (On a Mac, the file or the link may already have come by open-file or open-url.)
+    pendingFile = fileFromArgv(process.argv) || pendingFile;
+    pendingLink = linkFromArgv(process.argv) || pendingLink;
+    appMenu();
+    // Mac: title bar, menus and dialogs dark like the rest of Carnet, whatever the system setting.
+    if (IS_MAC) nativeTheme.themeSource = 'dark';
     applyReminder();
-    if (!(startedInBackground && reminder().on)) createWindow();
+    const background = startedInBackground() && reminder().on && !pendingFile && !pendingLink;
+    if (!background) createWindow();
+    else if (IS_MAC && app.dock) { try { app.dock.hide(); } catch (_) {} }
+    // Mac: a click on the Dock icon opens the window again.
+    app.on('activate', () => showWindow());
   });
 
-  // With the daily reminder, Carnet stays in the notification area when its window is closed.
-  app.on('window-all-closed', () => { if (!reminder().on || quitting) app.quit(); });
+  // With the daily reminder, Carnet stays in the notification area when its window is closed. A Mac app stays open
+  // (in the Dock) until it is quit.
+  app.on('window-all-closed', () => { if (!IS_MAC && (!reminder().on || quitting)) app.quit(); });
 }
 let quitting = false;
 app.on('before-quit', () => { quitting = true; });
@@ -243,14 +335,25 @@ ipcMain.handle('waveform', async (_e, file) => {
   return waveCache.get(file);
 });
 
-// État des autorisations Windows pour la caméra et le micro.
+// État des autorisations du système (Windows ou macOS) pour la caméra et le micro.
 ipcMain.handle('media-status', () => {
   const get = (t) => {
     try { return systemPreferences.getMediaAccessStatus(t); } catch (_) { return 'unknown'; }
   };
   return { camera: get('camera'), microphone: get('microphone'), compatCamera: !!settings.compatCamera, platform: process.platform };
 });
-ipcMain.handle('open-camera-settings', () => shell.openExternal('ms-settings:privacy-webcam'));
+// Mac: macOS asks the person once whether Carnet may use the camera and the microphone, before the first recording.
+// Afterwards, the choice is in System Settings > Privacy & Security.
+ipcMain.handle('ask-media-access', async () => {
+  if (!IS_MAC) return true;
+  for (const m of ['camera', 'microphone']) {
+    try { if (systemPreferences.getMediaAccessStatus(m) === 'not-determined') await systemPreferences.askForMediaAccess(m); } catch (_) {}
+  }
+  return true;
+});
+ipcMain.handle('open-camera-settings', (_e, what) => shell.openExternal(IS_MAC
+  ? `x-apple.systempreferences:com.apple.preference.security?${what === 'microphone' ? 'Privacy_Microphone' : 'Privacy_Camera'}`
+  : what === 'microphone' ? 'ms-settings:privacy-microphone' : 'ms-settings:privacy-webcam'));
 ipcMain.handle('set-compat-camera', (_e, on) => {
   writeSettings({ ...readSettings(), compatCamera: !!on });
   app.relaunch();
@@ -343,6 +446,7 @@ const recByFile = (file) => recs().find((r) => r.file === file || r.raw === file
 // Message compréhensible pour une erreur d'écriture.
 function friendlyFsError(err, where) {
   const code = err && err.code;
+  if ((code === 'EPERM' || code === 'EACCES') && IS_MAC) return t('macOS refuses to write to {where}. Allow Carnet in System Settings > Privacy & Security > Files and Folders (or Full Disk Access), or choose another folder.', { where });
   if (code === 'EPERM' || code === 'EACCES') return t('Windows refuses to write to {where}. Most common cause: Windows Security\'s "Controlled folder access" protection, which blocks unknown apps. Allow Carnet in Windows Security > Virus & threat protection > Manage ransomware protection > Allow an app through Controlled folder access, or choose another folder.', { where });
   if (code === 'ENOSPC') return t('The disk is full: cannot write to {where}. Free up some space, then try again.', { where });
   if (code === 'EBUSY') return t('The file is used by another app ({where}). Close it, then try again.', { where });
@@ -785,7 +889,7 @@ const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send
 const journalDir = () => settings.journalDir || null;
 const fetchFn = (...a) => net.fetch(...a);
 
-// Clé Gemini chiffrée avec le compte Windows de l'utilisateur.
+// Clé Gemini chiffrée avec le compte Windows de l'utilisateur (sur un Mac : dans son trousseau, le Keychain).
 function getKey() {
   if (!settings.geminiKey) return null;
   try {
@@ -1433,6 +1537,7 @@ ipcMain.handle('set-language', (_e, code) => {
   // Journal.md is written again in the new language.
   if (journalDir() && !data.broken) persist();
   if (tray) trayMenu();
+  appMenu();
   return l;
 });
 
@@ -1588,9 +1693,9 @@ ipcMain.handle('progress-reel', async (_e, { months = 0 } = {}) => {
 });
 
 // ---------- Daily reminder ----------
-// Optional: once a day at the chosen time, a Windows notification with what there is to check (realizations, things
-// left behind, a look-back), or a step forward to remember. Carnet then starts with Windows, without its window, and
-// stays in the notification area when its window is closed.
+// Optional: once a day at the chosen time, a notification with what there is to check (realizations, things left
+// behind, a look-back), or a step forward to remember. Carnet then starts with the computer, without its window, and
+// stays in the notification area (Windows) or the menu bar (Mac) when its window is closed.
 function reminder() {
   const r = settings.reminder || {};
   return { on: !!r.on, time: /^([01]\d|2[0-3]):[0-5]\d$/.test(r.time || '') ? r.time : '20:00' };
@@ -1606,17 +1711,31 @@ function trayMenu() {
 }
 const localDay = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 const reminderAt = (r, now) => { const [h, m] = r.time.split(':').map(Number); const at = new Date(now); at.setHours(h, m, 0, 0); return at; };
+// Icon in the notification area (Windows), or in the menu bar (Mac: a black and transparent "template" picture, that
+// macOS colours like the other icons there; trayTemplate@2x.png is used on Retina screens).
+function trayIcon() {
+  const dir = path.join(__dirname, '..', 'build');
+  if (!IS_MAC) return nativeImage.createFromPath(path.join(dir, process.platform === 'win32' ? 'icon.ico' : 'icon.png'));
+  const img = nativeImage.createFromPath(path.join(dir, 'trayTemplate.png'));
+  img.setTemplateImage(true);
+  return img;
+}
 function applyReminder() {
   const r = reminder();
-  // Starts with Windows only while the reminder is on (not for the development version).
-  if (process.platform === 'win32' && app.isPackaged) {
-    try { app.setLoginItemSettings({ openAtLogin: r.on, path: process.execPath, args: ['--background'], name: 'Carnet' }); } catch (_) {}
+  // Starts with the computer only while the reminder is on (not for the development version). On a Mac, it then
+  // appears in System Settings > General > Login Items.
+  if (app.isPackaged) {
+    try {
+      if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: r.on, path: process.execPath, args: ['--background'], name: 'Carnet' });
+      else if (IS_MAC && app.getLoginItemSettings().openAtLogin !== r.on) app.setLoginItemSettings({ openAtLogin: r.on });
+    } catch (_) {}
   }
   if (r.on && !tray) {
     try {
-      tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png')));
+      tray = new Tray(trayIcon());
       tray.setToolTip('Carnet');
-      tray.on('click', () => showWindow());
+      // On a Mac, a click on a menu bar icon opens its menu (Open Carnet, Quit Carnet).
+      if (!IS_MAC) tray.on('click', () => showWindow());
       trayMenu();
     } catch (_) { tray = null; }
   } else if (!r.on && tray) {

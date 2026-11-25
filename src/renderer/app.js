@@ -1,5 +1,8 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
+// Mac: the texts and buttons for macOS replace those for Windows (classes mac-only and win-only in index.html).
+const IS_MAC = window.api.platform === 'darwin';
+if (IS_MAC) document.body.classList.add('os-mac');
 
 // ---------- État ----------
 const state = {
@@ -1035,6 +1038,16 @@ async function openStream(camId, micId) {
 
 function cameraHelp(e, status) {
   const name = e && e.name;
+  if (IS_MAC) {
+    if (name === 'NotAllowedError' || status.camera === 'denied' || status.camera === 'restricted') {
+      return { text: t('macOS is blocking camera access for Carnet. Open System Settings > Privacy & Security > Camera, turn on Carnet, then quit and reopen Carnet.'), settings: true };
+    }
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') return { text: t('No camera found with this setting. Pick another camera in the list below.') };
+    if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+      return { text: t('The camera won’t start. Another app may be using it (FaceTime, Zoom, Teams, a browser): close it and try again.'), settings: true };
+    }
+    return { text: t('The camera won’t start. Try again or pick another camera.'), settings: true };
+  }
   if (name === 'NotAllowedError' || status.camera === 'denied') {
     return { text: t('Windows is blocking camera access for Carnet. Open the Windows camera settings and turn on “Let desktop apps access your camera”.'), settings: true };
   }
@@ -1056,14 +1069,17 @@ async function showCameraError(e) {
   p.textContent = help.text;
   const tech = document.createElement('p');
   tech.className = 'small muted';
-  tech.textContent = t('Details: {error} · Windows permission: {perm}', { error: e ? e.name + (e.message ? ': ' + e.message : '') : t('unknown'), perm: status.camera }) + (status.compatCamera ? ' · ' + t('compatible mode on') : '');
+  const details = { error: e ? e.name + (e.message ? ': ' + e.message : '') : t('unknown'), perm: status.camera };
+  tech.textContent = IS_MAC ? t('Details: {error} · macOS permission: {perm}', details)
+    : t('Details: {error} · Windows permission: {perm}', details) + (status.compatCamera ? ' · ' + t('compatible mode on') : '');
   const actions = document.createElement('div');
   actions.className = 'cam-actions';
   const btn = (label, fn, cls = 'btn') => { const b = document.createElement('button'); b.className = cls; b.textContent = label; b.onclick = fn; actions.appendChild(b); };
   btn(t('Try again'), () => startCamera(), 'btn primary');
   btn(t('Use the phone'), () => { rec.usePhone = true; startCamera(); });
-  if (help.settings) btn(t('Windows camera settings'), () => window.api.openCameraSettings());
-  if (help.compat || status.compatCamera) {
+  if (help.settings) btn(IS_MAC ? t('macOS camera settings') : t('Windows camera settings'), () => window.api.openCameraSettings('camera'));
+  // Compatible mode: the old Windows camera driver (nothing like it on a Mac).
+  if (!IS_MAC && (help.compat || status.compatCamera)) {
     btn(status.compatCamera ? t('Turn off compatible mode') : t('Turn on compatible mode'),
       () => { if (confirm(t('Carnet will restart to switch camera mode. Work in progress will be lost. Continue?'))) window.api.setCompatCamera(!status.compatCamera); });
   }
@@ -1105,6 +1121,10 @@ function showRecChoices() {
 }
 const MIC_WARN = 'Microphone unavailable: the recording will have no sound. Pick another microphone in the list.';
 function micWarning(text) { $('micWarn').textContent = text || ''; $('micWarn').classList.toggle('hidden', !text); }
+// Text for a microphone that could not be opened (on a Mac, a refusal is a setting of macOS).
+const micErrorText = (e) => (!e ? '' : IS_MAC && e.name === 'NotAllowedError'
+  ? t('macOS is blocking the microphone for Carnet: the recording will have no sound. Turn on Carnet in System Settings > Privacy & Security > Microphone, then quit and reopen Carnet.')
+  : t(MIC_WARN));
 async function lighten(track) {
   if (!track || !track.applyConstraints) return;
   try { await track.applyConstraints({ width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }); } catch (_) {}
@@ -1116,7 +1136,9 @@ async function startCamera() {
   micWarning('');
   $('btnRecToggle').disabled = true;
   $('recLabel').textContent = t('Preparing…');
-  // Appareils choisis dans les listes (sinon ceux par défaut de Windows).
+  // Mac: the first time, macOS asks whether Carnet may use the camera and the microphone.
+  if (IS_MAC) { try { await window.api.askMediaAccess(); } catch (_) {} }
+  // Appareils choisis dans les listes (sinon ceux par défaut du système).
   const camId = rec.pickedCam ? $('selCam').value : '', micId = rec.pickedMic ? $('selMic').value : '';
   // Pas de webcam sur cet ordinateur : le QR code pour le téléphone s'affiche directement.
   if (!rec.pickedCam && !rec.usePhone) {
@@ -1154,7 +1176,7 @@ async function startCamera() {
   const a = rec.stream.getAudioTracks()[0]?.getSettings().deviceId;
   if (v) $('selCam').value = v;
   if (a) $('selMic').value = a;
-  micWarning(opened.micError ? t(MIC_WARN) : '');
+  micWarning(micErrorText(opened.micError));
   startMeter();
 }
 
@@ -1266,7 +1288,7 @@ async function startPhoneCamera(micId) {
   } else {
     const a = rec.stream.getAudioTracks()[0]?.getSettings().deviceId;
     if (a) $('selMic').value = a;
-    micWarning(micError ? t(MIC_WARN) : '');
+    micWarning(micErrorText(micError));
     startMeter();
   }
   setDeviceSelects(!rec.countdown);
@@ -2026,6 +2048,8 @@ $('btnExportCancel').onclick = () => {
 // ---------- Raccourcis ----------
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea')) return;
+  // Cmd+C, Ctrl+R… belong to the system and the menus: the single-key shortcuts below take only Shift.
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   // Écran Journal : seul N (nouvelle entrée) est actif, le reste concerne le montage.
   if (!$('journalScreen').classList.contains('hidden') && $('modal').classList.contains('hidden')) {
     if (e.key === 'n' || e.key === 'N') newVideo();

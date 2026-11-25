@@ -1,7 +1,9 @@
 # Installed by build-windows.bat / npm install
 node_modules/
-# Installers made by compiler.bat / npm run dist
+# Installers made by compiler.bat / npm run dist / build-mac.sh
 dist/
+# whisper built for the Mac by build-mac.sh
+build/mac-whisper/
 *.log
 Thumbs.db
 desktop.ini

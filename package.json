@@ -1,12 +1,13 @@
 {
   "name": "carnet",
   "productName": "Carnet",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Video journal that works as a second brain: talk to the camera, Carnet transcribes, follows your subjects from one video to the next and keeps what you say about yourself.",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "dist:mac": "bash build-mac.sh"
   },
   "dependencies": {
     "ffmpeg-static": "^5.2.0"
@@ -18,10 +19,13 @@
   "build": {
     "appId": "fr.chef.carnet",
     "productName": "Carnet",
+    "copyright": "Copyright © 2026 Chef",
     "files": [
       "src/**/*",
       "build/icon.png",
       "build/icon.ico",
+      "build/trayTemplate.png",
+      "build/trayTemplate@2x.png",
       "package.json"
     ],
     "asarUnpack": [
@@ -44,6 +48,28 @@
       "include": "build/installer.nsh",
       "shortcutName": "Carnet",
       "artifactName": "Carnet-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "extraResources": [
+        {
+          "from": "build/mac-whisper",
+          "to": "whisper"
+        }
+      ],
+      "extendInfo": {
+        "NSCameraUsageDescription": "Carnet films the entries of your video journal.",
+        "NSMicrophoneUsageDescription": "Carnet records your voice in the entries of your video journal.",
+        "NSLocalNetworkUsageDescription": "Carnet receives the picture of your phone over your Wi-Fi when you use the phone as a camera."
+      }
+    },
+    "dmg": {
+      "artifactName": "Carnet-${version}-mac-${arch}.${ext}",
+      "writeUpdateInfo": false
     },
     "fileAssociations": [
       {

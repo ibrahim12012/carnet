@@ -1,0 +1,75 @@
+name: Build
+
+# Pushing a tag such as v0.2.0 builds Carnet for Windows and for Mac (Apple Silicon and Intel), then puts the three
+# files in a draft release, to check and publish by hand. "Run workflow" (Actions tab) builds them without a release:
+# the files are then under Artifacts on the page of the run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15        # Apple Silicon (arm64)
+          - runner: macos-15-intel  # Intel (x64)
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: bash build-mac.sh
+      - name: Check the FFmpeg inside the app
+        run: |
+          F=$(node -p "require('ffmpeg-static')")
+          "$F" -hide_banner -version | sed -n 1p
+          FILTERS=$("$F" -hide_banner -filters 2>/dev/null || true)
+          if [[ "$FILTERS" == *drawtext* ]]; then
+            echo "drawtext: yes"
+          else
+            echo "::warning::This FFmpeg has no drawtext filter: on this Mac build, the clips get no date and the progress reel cannot be made."
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mac-${{ matrix.runner }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: files
+          merge-multiple: true
+      - name: Draft release with the three files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l files
+          gh release create "$GITHUB_REF_NAME" files/* --draft --title "Carnet ${GITHUB_REF_NAME#v}" --notes "Windows: Carnet-Setup-*.exe. Mac: Carnet-*-mac-arm64.dmg (Apple Silicon: M1 and later) or Carnet-*-mac-x64.dmg (Intel)."

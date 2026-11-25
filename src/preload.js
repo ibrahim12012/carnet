@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   lang: ipcRenderer.sendSync('get-language'),
+  // 'win32' or 'darwin' (Mac): some texts and buttons depend on the system.
+  platform: process.platform,
   setLanguage: (code) => ipcRenderer.invoke('set-language', code),
   initialFile: () => ipcRenderer.invoke('initial-file'),
   initialLink: () => ipcRenderer.invoke('initial-link'),
@@ -43,7 +45,8 @@ contextBridge.exposeInMainWorld('api', {
   exportCancel: () => ipcRenderer.invoke('export-cancel'),
   waveform: (file) => ipcRenderer.invoke('waveform', file),
   mediaStatus: () => ipcRenderer.invoke('media-status'),
-  openCameraSettings: () => ipcRenderer.invoke('open-camera-settings'),
+  openCameraSettings: (what) => ipcRenderer.invoke('open-camera-settings', what),
+  askMediaAccess: () => ipcRenderer.invoke('ask-media-access'),
   setCompatCamera: (on) => ipcRenderer.invoke('set-compat-camera', on),
   journalState: () => ipcRenderer.invoke('journal-state'),
   journalChooseDir: () => ipcRenderer.invoke('journal-choose-dir'),

@@ -35,8 +35,10 @@ const PAGE_VERSION = 7;
 
 // Adresses IPv4 du réseau local que le téléphone peut joindre, la plus probable d'abord (Wi-Fi, adresse privée,
 // pas une carte virtuelle).
-const WIFI = /wi-?fi|wlan|wireless|802\.11/i;
-const VIRTUAL = /vmware|virtualbox|vbox|hyper-v|vethernet|docker|wsl|tailscale|zerotier|hamachi|loopback|bluetooth|npcap|tap-|tun/i;
+// On a Mac, Wi-Fi and Ethernet are both "en0", "en1"…; "bridge…", "vmenet…" and "anpi…" are virtual machines and
+// USB links, "utun…" the VPNs.
+const WIFI = /wi-?fi|wlan|wireless|802\.11|^en\d+$/i;
+const VIRTUAL = /vmware|virtualbox|vbox|hyper-v|vethernet|docker|wsl|tailscale|zerotier|hamachi|loopback|bluetooth|npcap|tap-|tun|^bridge\d|^vmenet|^anpi/i;
 const isPrivate = (ip) => /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
 function lanAddresses() {
   const out = [];
@@ -383,7 +385,7 @@ function setup({ app, ipcMain, getWin }) {
   // Règle du pare-feu Windows pour Carnet (tous les profils réseau, y compris « Public »), avec la demande
   // d'autorisation administrateur de Windows. Sert quand le téléphone n'arrive pas à joindre l'ordinateur.
   ipcMain.handle('phone-allow-firewall', () => new Promise((resolve) => {
-    if (process.platform !== 'win32') { resolve({ ok: false, error: 'Seulement sous Windows.' }); return; }
+    if (process.platform !== 'win32') { resolve({ ok: false, error: t('Only on Windows.') }); return; }
     const exe = process.execPath.replace(/'/g, "''");
     const args = `advfirewall firewall delete rule name="Carnet" & netsh advfirewall firewall add rule name="Carnet" dir=in action=allow program="${exe}" enable=yes profile=any`;
     const ps = `Start-Process -FilePath cmd.exe -ArgumentList '/c netsh ${args.replace(/'/g, "''")}' -Verb RunAs -WindowStyle Hidden -Wait`;

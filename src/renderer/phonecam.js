@@ -40,7 +40,10 @@ window.phoneCam = (() => {
     if (!relayCount && !chunkCount) return t('No picture arrives from the phone, not even by the fallback path. On the phone, close the Carnet tab, scan the QR code again and tap “Start camera”.');
     if (!d.phone.length) return t('The phone announced no address: its browser blocks the direct connection.');
     if (d.phone.every((c) => /\.local:/.test(c))) return t('The phone hides its address (a “.local” name) and the computer cannot find it. Allowing the camera for the page on the phone, then trying again, often solves this.');
-    if (d.replies.length && d.replies.every((x) => !x)) return t('The phone and the computer can see each other, but the video (UDP) does not get through. Usual causes: the Windows firewall (button below), a VPN or security software running on the computer, or a Wi-Fi that isolates devices (guest network, public or company Wi-Fi).');
+    if (d.replies.length && d.replies.every((x) => !x)) {
+      if (window.api && window.api.platform === 'darwin') return t('The phone and the computer can see each other, but the video (UDP) does not get through. Usual causes: Carnet is not allowed on the local network (System Settings > Privacy & Security > Local Network), a VPN or security software running on the Mac, or a Wi-Fi that isolates devices (guest network, public or company Wi-Fi).');
+      return t('The phone and the computer can see each other, but the video (UDP) does not get through. Usual causes: the Windows firewall (button below), a VPN or security software running on the computer, or a Wi-Fi that isolates devices (guest network, public or company Wi-Fi).');
+    }
     return t('The video connection failed.');
   }
   // Rotation de l'image du téléphone (0, 90, 180, 270°, sens horaire), gardée d'une fois sur l'autre.

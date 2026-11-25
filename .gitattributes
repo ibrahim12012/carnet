@@ -1,5 +1,9 @@
 # Text files with LF in the repository; the Windows scripts keep CRLF so that cmd reads them correctly.
 * text=auto
 *.bat text eol=crlf
+# The Mac script and the GitHub build run on macOS and Linux: LF only.
+*.sh text eol=lf
+*.yml text eol=lf
 *.ico binary
 *.png binary
+*.icns binary

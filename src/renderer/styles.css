@@ -36,6 +36,8 @@ body {
 .editor-screen.hidden, .journal-screen.hidden { display: none !important; }
 h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
 .hidden { display: none !important; }
+/* Texts and buttons for one system: Windows by default, macOS when the body has .os-mac (app.js). */
+.os-mac .win-only, body:not(.os-mac) .mac-only { display: none !important; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .spacer { flex: 1; }

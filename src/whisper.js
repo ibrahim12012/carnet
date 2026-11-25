@@ -1,5 +1,7 @@
 // Transcription locale avec whisper.cpp (gratuit, hors ligne, sur le processeur).
 // Installation au premier usage : programme depuis GitHub, modèle depuis Hugging Face.
+// On a Mac, the program comes with Carnet (built by the GitHub build, in Contents/Resources/whisper), or from Homebrew
+// (brew install whisper-cpp); only the model is downloaded.
 const { app, net } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -34,8 +36,22 @@ function findExe(root) {
   return fallback;
 }
 
+// Mac: the whisper-cli of Carnet, then Homebrew's (Apple Silicon, then Intel). An app opened from the Finder does not
+// have Homebrew in its PATH, hence the full paths.
+function macExe() {
+  const list = [
+    process.resourcesPath && path.join(process.resourcesPath, 'whisper', 'whisper-cli'),
+    '/opt/homebrew/bin/whisper-cli',
+    '/usr/local/bin/whisper-cli',
+    '/opt/homebrew/bin/whisper-cpp',
+    '/usr/local/bin/whisper-cpp',
+  ].filter(Boolean);
+  return list.find((f) => { try { fs.accessSync(f, fs.constants.X_OK); return true; } catch (_) { return false; } }) || null;
+}
+const exePath = () => findExe(path.join(dir(), 'bin')) || (process.platform === 'darwin' ? macExe() : null);
+
 function status(settings) {
-  const exe = findExe(path.join(dir(), 'bin'));
+  const exe = exePath();
   const models = Object.fromEntries(Object.keys(MODELS).map((k) => [k, fs.existsSync(modelPath(k))]));
   const model = settings.whisperModel && models[settings.whisperModel] ? settings.whisperModel : Object.keys(models).find((k) => models[k]) || null;
   return { installed: !!exe && !!model, exe: !!exe, models, model, auto: settings.autoTranscribe !== false, catalog: MODELS };
@@ -90,7 +106,8 @@ function run(cmd, args, opts = {}) {
 
 async function install(modelKey, onProgress) {
   const binDir = path.join(dir(), 'bin');
-  if (!findExe(binDir)) {
+  if (!exePath()) {
+    if (process.platform === 'darwin') throw new Error(t('The whisper program is not included in this version of Carnet. Install it with Homebrew (in Terminal: brew install whisper-cpp), then click Install again.'));
     onProgress({ step: 'Whisper program', pct: 0 });
     const zip = path.join(dir(), BIN_ASSET);
     await download(await binaryUrl(), zip, (p) => onProgress({ step: 'Whisper program', pct: p }));
@@ -111,7 +128,7 @@ async function install(modelKey, onProgress) {
 // Transcrit une vidéo : extrait le son en 16 kHz mono, lance whisper-cli, renvoie le JSON.
 // language: 'auto' = whisper detects the language spoken in each video (the interface language does not matter).
 async function transcribe({ ffmpeg, video, modelKey, language = 'auto', onProgress, onSpawn }) {
-  const exe = findExe(path.join(dir(), 'bin'));
+  const exe = exePath();
   if (!exe) throw new Error(t('whisper is not installed.'));
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'carnet-whisper-'));
   const wav = path.join(work, 'audio.wav');

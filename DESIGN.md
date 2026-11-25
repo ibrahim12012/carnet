@@ -27,7 +27,7 @@ All subjects timeline: the page is wider (1240 px). A subject's line is 3 px, bl
 
 ## Type
 
-- Font: Segoe UI (Windows system font)
+- Font: Segoe UI (Windows system font); on a Mac, the system font (San Francisco)
 - Base size: 13 px
 - Section titles: 12 px, capitals, secondary grey
 
@@ -50,10 +50,14 @@ Thin (10 px track, 6 px thumb), dark grey thumb `#3a3d43` with rounded ends on a
 
 ## Progress reel
 
-1280x720 at 30 frames per second. Cards on the background colour, text centred in Segoe UI Bold: the kind in the accent (32 px), the situation in secondary grey, the step in the main text colour (50 px, 5 lines at most), the date and subject in secondary grey. Moments of videos are fitted in the frame with black bars, "Then · date" or "Now · date" at the top left on a black box at 55 %. Short fades between pieces.
+1280x720 at 30 frames per second. Cards on the background colour, text centred in Segoe UI Bold (Arial Bold on a Mac): the kind in the accent (32 px), the situation in secondary grey, the step in the main text colour (50 px, 5 lines at most), the date and subject in secondary grey. Moments of videos are fitted in the frame with black bars, "Then · date" or "Now · date" at the top left on a black box at 55 %. Short fades between pieces.
 
 ## Icon
 
 `build/icon.svg`: a thick "C" in the accent colour with the red recording dot in its centre, flat colours, on a transparent background. Exported to `build/icon.png` (512 px) and `build/icon.ico` (16 to 256 px; from 32 px down, a thicker C and a bigger dot).
+
+Mac: `build/icon-mac.svg`, the same C and dot on a rounded square in the background colours (`#2e3035` to `#1b1c1f`, from top to bottom), with the margins and the shadow of macOS icons; exported to `build/icon.icns` (16 to 1024 px). In the menu bar, `build/trayTemplate.png` (18 px) and `@2x` (36 px): the C and the dot alone, black on transparent, a little thicker; macOS colours them like the other icons there.
+
+On a Mac, the window, its title bar and the menus stay dark whatever the system setting, like the rest of Carnet.
 
 The colours are defined once in `src/renderer/styles.css` (`:root` block).

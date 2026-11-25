@@ -179,7 +179,8 @@
             <div class="pp-text">
               <h3>Use your phone as a camera</h3>
               <ol>
-                <li data-i18n-html>Put the phone on the <b>same Wi-Fi</b> as the computer. If Windows asks whether to allow Carnet on the network, accept.</li>
+                <li class="win-only" data-i18n-html>Put the phone on the <b>same Wi-Fi</b> as the computer. If Windows asks whether to allow Carnet on the network, accept.</li>
+                <li class="mac-only" data-i18n-html>Put the phone on the <b>same Wi-Fi</b> as the Mac. If macOS asks whether Carnet may accept incoming connections or find devices on your local network, allow it.</li>
                 <li>Scan this QR code with the phone’s camera.</li>
                 <li data-i18n-html>The first time, the browser warns that the connection is “not private”: tap <b>Show Details</b> (iPhone) or <b>Advanced</b> (Android), then <b>visit this website</b> or <b>Proceed</b>. This is normal: the page comes from your computer, not from the Internet.</li>
                 <li data-i18n-html>Tap <b>Start camera</b>. Then choose below who records: the phone (picture and sound at full quality) or this computer.</li>
@@ -189,13 +190,14 @@
               <div class="pp-diag hidden" id="phoneDiag">
                 <b>The video does not get through between the phone and the computer.</b>
                 <p id="phoneDiagText"></p>
-                <div class="pp-actions"><button class="btn small-btn" id="btnPhoneFirewall2">Allow Carnet in the firewall</button><button class="btn small-btn" id="btnPhoneDiagCopy">Copy the technical details</button></div>
+                <div class="pp-actions"><button class="btn small-btn win-only" id="btnPhoneFirewall2">Allow Carnet in the firewall</button><button class="btn small-btn" id="btnPhoneDiagCopy">Copy the technical details</button></div>
               </div>
               <div class="pp-help hidden" id="phoneHelp">
                 <b>The phone does not reach the computer?</b>
                 <ul>
                   <li data-i18n-html>Check that both are on the <b>same Wi-Fi</b> (not the phone’s 4G/5G, not a “guest” network).</li>
-                  <li><span>The Windows firewall may be blocking Carnet:</span> <button class="btn small-btn" id="btnPhoneFirewall">Allow Carnet in the firewall</button> <span class="muted small">(Windows asks for confirmation)</span></li>
+                  <li class="win-only"><span>The Windows firewall may be blocking Carnet:</span> <button class="btn small-btn" id="btnPhoneFirewall">Allow Carnet in the firewall</button> <span class="muted small">(Windows asks for confirmation)</span></li>
+                  <li class="mac-only" data-i18n-html>macOS may be blocking Carnet: in System Settings, turn on Carnet in <b>Privacy &amp; Security &gt; Local Network</b>, and if the firewall is on, allow incoming connections for Carnet in <b>Network &gt; Firewall &gt; Options</b>.</li>
                   <li>If the page opens on the phone but stays stuck, close the tab and scan the QR code again.</li>
                 </ul>
               </div>
@@ -373,8 +375,9 @@
       <section class="set-sec" id="setReminderSec">
         <h3>Daily reminder</h3>
         <div class="set-row reminder-row"><label class="check"><input type="checkbox" id="setReminderOn"> <span>Remind me every day at</span></label><input type="time" id="setReminderTime" value="20:00"><div class="spacer"></div><button class="btn small-btn" id="btnReminderTest" title="Shows today’s notification now">Try it</button></div>
-        <p class="muted small">A Windows notification with what there is to check: a realization or something you left behind whose time has come, a look-back, a subject that stopped coming up. When there is nothing to check, where you stood a month ago. Clicking it opens Carnet.</p>
-        <p class="muted small">While the reminder is on, Carnet starts with Windows without opening its window, and stays in the notification area, next to the clock, when you close it. To quit it, right-click its icon there.</p>
+        <p class="muted small">A notification with what there is to check: a realization or something you left behind whose time has come, a look-back, a subject that stopped coming up. When there is nothing to check, where you stood a month ago. Clicking it opens Carnet.</p>
+        <p class="muted small win-only">While the reminder is on, Carnet starts with Windows without opening its window, and stays in the notification area, next to the clock, when you close it. To quit it, right-click its icon there.</p>
+        <p class="muted small mac-only">While the reminder is on, Carnet opens by itself when you log in, without its window, and its icon stays in the menu bar. To quit it, click that icon, then Quit Carnet. The first time, macOS asks whether Carnet may send notifications: allow it.</p>
       </section>
 
       <section class="set-sec" id="setLangSec">

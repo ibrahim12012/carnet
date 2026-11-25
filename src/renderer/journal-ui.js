@@ -1774,7 +1774,7 @@
     try {
       S = await window.api.journalSetKey(key);
       $('setKey').value = '';
-      $('setKeyMsg').textContent = t('Key valid and saved (encrypted with your Windows account).');
+      $('setKeyMsg').textContent = window.api.platform === 'darwin' ? t('Key valid and saved (encrypted in the keychain of your Mac).') : t('Key valid and saved (encrypted with your Windows account).');
     } catch (err) {
       $('setKeyMsg').textContent = t('Key refused: {error}', { error: cleanErr(err).slice(0, 200) });
     }
