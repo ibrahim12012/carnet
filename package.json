@@ -37,7 +37,16 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "fileAssociations": [
+        {
+          "ext": ["mp4", "mov", "mkv", "webm", "avi", "m4v"],
+          "name": "Video",
+          "description": "Video",
+          "role": "Editor",
+          "icon": "build/icon.ico"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -56,44 +65,30 @@
       "identity": null,
       "hardenedRuntime": false,
       "extraResources": [
-        {
-          "from": "build/mac-whisper",
-          "to": "whisper"
-        }
+        { "from": "build/mac-whisper", "to": "whisper" }
       ],
       "extendInfo": {
         "NSCameraUsageDescription": "Carnet films the entries of your video journal.",
         "NSMicrophoneUsageDescription": "Carnet records your voice in the entries of your video journal.",
         "NSLocalNetworkUsageDescription": "Carnet receives the picture of your phone over your Wi-Fi when you use the phone as a camera."
-      }
+      },
+      "fileAssociations": [
+        {
+          "ext": ["mp4", "mov", "mkv", "webm", "avi", "m4v"],
+          "name": "Video",
+          "description": "Video",
+          "role": "Editor"
+        }
+      ]
     },
     "dmg": {
       "artifactName": "Carnet-${version}-mac-${arch}.${ext}",
       "writeUpdateInfo": false
     },
-    "fileAssociations": [
-      {
-        "ext": [
-          "mp4",
-          "mov",
-          "mkv",
-          "webm",
-          "avi",
-          "m4v"
-        ],
-        "name": "Video",
-        "description": "Video",
-        "role": "Editor",
-        "icon": "build/icon.ico"
-      }
-    ],
     "protocols": [
       {
         "name": "Carnet",
-        "schemes": [
-          "carnet",
-          "raccord"
-        ]
+        "schemes": ["carnet", "raccord"]
       }
     ]
   },
