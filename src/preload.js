@@ -69,7 +69,11 @@ contextBridge.exposeInMainWorld('api', {
   journalRebuild: () => ipcRenderer.invoke('journal-rebuild'),
   journalSemaine: (key) => ipcRenderer.invoke('journal-semaine', key),
   journalPrecision: (o) => ipcRenderer.invoke('journal-precision', o),
-  journalApplyPrecisions: () => ipcRenderer.invoke('journal-apply-precisions'),
+  // A clarification on a video: corrects that video ({ entry, texte }); without texte, applies what waits.
+  journalClarify: (o) => ipcRenderer.invoke('journal-clarify', o),
+  journalFact: (o) => ipcRenderer.invoke('journal-fact', o),
+  journalCheck: (o) => ipcRenderer.invoke('journal-check', o),
+  memoryBuild: (o) => ipcRenderer.invoke('memory-build', o),
   journalOpen: (what) => ipcRenderer.invoke('journal-open', what),
   whisperInstall: (model) => ipcRenderer.invoke('whisper-install', model),
   onWhisperInstallProgress: (cb) => ipcRenderer.on('whisper-install-progress', (_e, p) => cb(p)),

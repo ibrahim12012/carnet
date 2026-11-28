@@ -128,7 +128,8 @@ function load(dir) {
     }
   }
   d = d || {};
-  const data = { version: 3, entries: d.entries || [], sujets: d.sujets || [], bilans: d.bilans || [], semaines: d.semaines || {}, precisions: d.precisions || [], profile: normalizeProfile(d.profile), progress: normalizeProgress(d.progress), rebuild: !!d.rebuild };
+  const data = { version: 3, entries: d.entries || [], sujets: d.sujets || [], bilans: d.bilans || [], semaines: d.semaines || {}, precisions: [], faits: [], checks: [], profile: normalizeProfile(d.profile), progress: normalizeProgress(d.progress), rebuild: !!d.rebuild };
+  normalizeClarifications(data, d);
   for (const k of ['bilanDue', 'rebuildError', 'bilanError']) if (d[k] !== undefined) data[k] = d[k];
   // Journal from an earlier version (summaries by month): subjects are built from the cards.
   if ((d.version || 2) < 3 && data.entries.some(hasIdeas)) data.rebuild = true;
@@ -175,7 +176,7 @@ const newItemId = (p) => p + Date.now().toString(36) + Math.random().toString(36
 
 // Fingerprints of earlier default versions: if the file in the folder was not edited by hand, it is replaced
 // by the new version.
-const OLD_DEFAULTS = new Set(['bfa70c3da595f649', 'cb1dcf98caa77f21', '9237d6def9833a09', '127db5553d54ed01', '4b2aeb37eb1d5e23', '38e8e2a3f2fbf8f9', '8e034a1ef6858dad', '946a8e342766e3b8', '77a6d80c2281e591', '3e81c7d69618009a', 'ca8d800f1918c567']);
+const OLD_DEFAULTS = new Set(['bfa70c3da595f649', 'cb1dcf98caa77f21', '9237d6def9833a09', '127db5553d54ed01', '4b2aeb37eb1d5e23', '38e8e2a3f2fbf8f9', '8e034a1ef6858dad', '946a8e342766e3b8', '77a6d80c2281e591', '3e81c7d69618009a', 'ca8d800f1918c567', '6ec0ef816b17fdc1']);
 const fingerprint = (txt) => crypto.createHash('sha256').update(txt).digest('hex').slice(0, 16);
 
 // Copies the default instructions file into the journal folder if it is not there. The earlier French file name:
@@ -197,7 +198,7 @@ function ensureInstructions(dir, defaultFile) {
 // Sections that came with later versions, by version: instructions edited before a version keep their text and get
 // that version's sections added at each call (the file itself is not touched). A group already partly there (the
 // person removed a section on purpose) is left as it is.
-const NEW_SECTIONS = [['Tone', 'About the person', 'Strengths and weaknesses'], ['Progress', 'Look back', 'How far you\'ve come']];
+const NEW_SECTIONS = [['Tone', 'About the person', 'Strengths and weaknesses'], ['Progress', 'Look back', 'How far you\'ve come'], ['Differences with what the journal says', 'Correcting a video']];
 function withNewSections(txt, defaultTxt) {
   const re = (h, rest = '') => new RegExp(`^## ${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \t]*$${rest}`, 'm');
   const add = NEW_SECTIONS.filter((group) => !group.some((h) => re(h).test(txt)))
@@ -477,7 +478,7 @@ function reviewPrompt(data, rand = Math.random, now = Date.now()) {
     'Task: look at the strengths and weaknesses of the person, following the instructions: where they are on each item of their list in their recent videos, and new suggestions.',
     `Angles to start from for the suggestions this time: ${angle}. Then any other side of them the videos show.`,
     ...profileBlock(data, null),
-    ...precisionsBlock(data, [...recent, ...older]),
+    ...factsBlock(data),
     '',
     'Their list:', items.length ? items.join('\n') : '(empty)',
     '', 'Suggestions they set aside (never suggest them again):',
@@ -573,11 +574,19 @@ function planList(data, upTo) {
 }
 
 // For the analysis of a video: what was understood or left behind before (to link), and the plans (to close).
-function progressBlock(data, entry) {
+function progressBlock(data, entry, plan = { mode: 'recent' }) {
   const P = progressOf(data);
   const kindLabel = (x) => (x.kind === 'moved' ? 'left behind' : x.how === 'see' ? 'how to see it' : 'how to act');
-  const earlier = P.items.filter((x) => x.status === 'active' && x.kind !== 'done' && (!x.now || x.now.entry !== entry.id)).slice(-60);
-  const plans = [...planList(data, entry).values()].slice(-60);
+  const active = P.items.filter((x) => x.status === 'active' && x.kind !== 'done' && (!x.now || x.now.entry !== entry.id));
+  const allPlans = [...planList(data, entry).values()];
+  let earlier = active.slice(-60), plans = allPlans.slice(-60);
+  if (plan.mode === 'all') { earlier = active; plans = allPlans; }
+  if (plan.mode === 'search') {
+    // The last 30, and older ones found by search; what is still to decide only on the subjects sent in full.
+    const found = new Set(plan.steps || []), full = new Set(plan.full || []);
+    earlier = active.filter((x, i) => i >= active.length - 30 || found.has(x.id));
+    plans = allPlans.filter((x) => !x.subject || full.has(x.subject)).slice(-60);
+  }
   return [
     '',
     'What the person understood or left behind before (ids in brackets). In "links", say when this video applies one, goes against one, or meets the same kind of situation:',
@@ -954,7 +963,7 @@ function backfillPrompt(data) {
   const known = P.items.filter((x) => x.status === 'active').map((x) => `- ${x.text}`);
   return [
     'Task: find the steps forward in these journal videos, following the instructions ("Progress"): what the person says they did or settled, understood (how to act, or how to see a situation) or left behind. Each idea has a reference (for example e12ab#3).',
-    ...precisionsBlock(data, list),
+    ...factsBlock(data),
     ...profileBlock(data, null),
     '',
     `${list.length} video(s), in chronological order:`,
@@ -1007,48 +1016,196 @@ function reelPlan(data, from, to, max = 10) {
 }
 
 // ---------- Requests to Gemini ----------
+// What an analysis sends about the journal (plan.mode):
+//   all    : everything, when it fits in MEMORY_BUDGET
+//   recent : the 80 open and 40 concluded subjects discussed most recently and the last 60 steps forward (when it
+//            does not fit and search memory is not ready: as before search memory existed)
+//   search : the subjects of plan.full in full (the most recent, and older ones found by meaning or by name), the
+//            others by their title only, plus older videos (plan.videos) and steps (plan.steps) found by search
+const MEMORY_BUDGET = 24000; // tokens of journal context in one analysis
+const tokensOf = (txt) => Math.ceil(String(txt || '').length / 4);
+function subjectLines(s, stats) {
+  const st = stats.get(s.id) || { entries: new Set(), last: 0 };
+  if (s.etat === 'conclu') return [`[${s.id}] ${s.titre} · concluded: ${s.conclusion || 'no detail'}`];
+  const L = [`[${s.id}] ${s.titre}${s.categorie ? ' · ' + s.categorie : ''} · open · discussed ${st.entries.size} time(s), last on ${promptShort(st.last || 0)}`];
+  if (s.ou_j_en_suis) L.push(`   Where they're at: ${s.ou_j_en_suis}`);
+  const before = (s.historique || []).filter((x) => !x.titre && x.ou_j_en_suis && x.ou_j_en_suis !== s.ou_j_en_suis).pop();
+  if (before) L.push(`   Before (${promptShort(before.date)}): ${before.ou_j_en_suis.slice(0, 400)}`);
+  if ((s.a_trancher || []).length) L.push(`   Still to decide: ${s.a_trancher.join(' ; ')}`);
+  return L;
+}
 // The subjects already in the journal, so that Gemini links the video to the right threads.
-function subjectsBlock(data) {
+function subjectsBlock(data, plan = { mode: 'recent' }) {
   if (!data.sujets.length) return 'Subjects already in the journal: none yet.';
   const stats = subjectStats(data);
-  const last = (s) => (stats.get(s.id) || {}).last || 0;
-  const open = sortedSubjects(data, stats).filter((s) => s.etat !== 'conclu').slice(0, 80);
-  const done = sortedSubjects(data, stats).filter((s) => s.etat === 'conclu').slice(0, 40);
+  const sorted = sortedSubjects(data, stats);
   const L = ['Subjects already in the journal (when the video talks about one, use exactly its id and title):'];
-  for (const s of open) {
-    L.push(`[${s.id}] ${s.titre}${s.categorie ? ' · ' + s.categorie : ''} · open · discussed ${stats.get(s.id).entries.size} time(s), last on ${promptShort(last(s))}`);
-    if (s.ou_j_en_suis) L.push(`   Where they're at: ${s.ou_j_en_suis}`);
-    const before = (s.historique || []).filter((x) => !x.titre && x.ou_j_en_suis && x.ou_j_en_suis !== s.ou_j_en_suis).pop();
-    if (before) L.push(`   Before (${promptShort(before.date)}): ${before.ou_j_en_suis.slice(0, 400)}`);
-    if (s.a_trancher.length) L.push(`   Still to decide: ${s.a_trancher.join(' ; ')}`);
+  if (plan.mode === 'search') {
+    const full = new Set(plan.full || []);
+    const shown = sorted.filter((s) => full.has(s.id));
+    for (const s of shown.filter((x) => x.etat !== 'conclu')) L.push(...subjectLines(s, stats));
+    const doneShown = shown.filter((x) => x.etat === 'conclu');
+    if (doneShown.length) L.push('', 'Concluded subjects (to reopen if the person comes back to them):', ...doneShown.flatMap((s) => subjectLines(s, stats)));
+    const rest = sorted.filter((s) => !full.has(s.id));
+    if (rest.length) {
+      L.push('', 'Other subjects of the journal, by their title only (their details were not sent; when the video talks about one, use its id and title):');
+      for (const s of rest.slice(0, 400)) L.push(`[${s.id}] ${s.titre} · ${s.etat === 'conclu' ? 'concluded' : 'open'} · last on ${promptShort((stats.get(s.id) || {}).last || 0)}`);
+      if (rest.length > 400) L.push(`(and ${rest.length - 400} older subjects)`);
+    }
+    return L.join('\n');
   }
-  if (done.length) {
-    L.push('', 'Concluded subjects (to reopen if the person comes back to them):');
-    for (const s of done) L.push(`[${s.id}] ${s.titre} · concluded: ${s.conclusion || 'no detail'}`);
-  }
+  const all = plan.mode === 'all';
+  const open = sorted.filter((s) => s.etat !== 'conclu').slice(0, all ? Infinity : 80);
+  const done = sorted.filter((s) => s.etat === 'conclu').slice(0, all ? Infinity : 40);
+  for (const s of open) L.push(...subjectLines(s, stats));
+  if (done.length) L.push('', 'Concluded subjects (to reopen if the person comes back to them):', ...done.flatMap((s) => subjectLines(s, stats)));
   return L.join('\n');
 }
-
-// ---------- Clarifications from the person ----------
-// What the person adds to clear up a misunderstanding: who is who, a misheard word, the context.
-// Scope "journal": sent with every analysis and every summary. Scope "video": only when that video is concerned.
-function precisionsBlock(data, entries, { markNew = false } = {}) {
-  const ids = new Set((entries || []).map((e) => e.id));
-  const list = (data.precisions || []).filter((p) => p.portee === 'journal' || (p.entry && ids.has(p.entry)));
+// Search memory: older videos close to this one.
+function olderVideosBlock(data, plan) {
+  if (!plan || plan.mode !== 'search') return [];
+  const list = (plan.videos || []).map((id) => data.entries.find((x) => x.id === id)).filter((x) => x && x.analysis);
   if (!list.length) return [];
-  const label = (p) => {
-    if (p.portee === 'journal') return '';
-    const e = data.entries.find((x) => x.id === p.entry);
-    return e ? `(video of ${promptShort(e.date)} · ${entryTitle(e)}) ` : '';
-  };
-  return [
-    '',
-    'Clarifications given by the person (always true: they come before the transcript and before what was written so far):',
-    ...list.map((p) => `- ${label(p)}${p.texte}${markNew && !p.appliquee ? ' (new)' : ''}`),
-  ];
+  return ['', 'Earlier videos close to this one, found by search (for context only: what they said is already in the subjects):',
+    ...list.map((x) => `[${x.id}] ${promptShort(x.date)} · ${entryTitle(x)}${x.analysis.resume ? ': ' + x.analysis.resume.slice(0, 600) : ''}`)];
 }
 
-function entryContext(data, entry) {
+// ---------- Search memory ----------
+// What each item of the journal is about, as plain text; memory.js keeps a vector of it, made again when the text
+// changes. Subjects, video cards and steps forward.
+function memoryTexts(data) {
+  const m = new Map();
+  for (const s of data.sujets) m.set('s:' + s.id, [s.titre, s.categorie, s.ou_j_en_suis, (s.a_trancher || []).join(' ; '), s.conclusion].filter(Boolean).join('\n').slice(0, 6000));
+  for (const e of data.entries) {
+    const a = e.analysis;
+    if (a && (a.resume || (a.idees || []).length)) m.set('e:' + e.id, [entryTitle(e), a.resume, (a.personnes || []).join(', '), ...(a.idees || []).map((i) => i.texte)].filter(Boolean).join('\n').slice(0, 6000));
+  }
+  for (const x of progressOf(data).items) if (x.status === 'active' && x.kind !== 'done') m.set('x:' + x.id, [x.situation, x.text].filter(Boolean).join(': ').slice(0, 2000));
+  return m;
+}
+// What the video says, for the search: its title and chapters, and its transcript in up to 4 passages spread over it.
+function queryText(entry) {
+  return [entry.title, ...(entry.chapters || []).map((c) => c.title), ...((entry.transcript && entry.transcript.segments) || []).map((x) => x.text)].filter(Boolean).join(' ');
+}
+function queryChunks(entry, max = 4, size = 6000) {
+  const txt = queryText(entry);
+  if (!txt) return [];
+  const n = Math.min(max, Math.ceil(txt.length / size));
+  const step = n > 1 ? (txt.length - size) / (n - 1) : 0;
+  return Array.from({ length: n }, (_, i) => txt.slice(Math.round(i * step), Math.round(i * step) + size));
+}
+// Words of a subject title that a video would say: names (a capital letter, not the first word) and long words.
+const STOP = new Set(['about', 'after', 'again', 'aller', 'avant', 'avec', 'being', 'between', 'comment', 'could', 'dans', 'depuis', 'doing', 'encore', 'entre', 'faire', 'from', 'have', 'into', 'leur', 'mais', 'more', 'other', 'pour', 'quand', 'should', 'since', 'sobre', 'still', 'that', 'their', 'there', 'these', 'this', 'what', 'when', 'where', 'which', 'while', 'with', 'without', 'would', 'your']);
+function namesIn(title) {
+  const out = new Set();
+  String(title || '').split(/[^\p{L}\p{N}'’-]+/u).filter(Boolean).forEach((w, i) => {
+    const n = norm(w);
+    if (n.length < 3 || STOP.has(n)) return;
+    if ((i > 0 && /^\p{Lu}/u.test(w)) || n.length >= 7) out.add(n);
+  });
+  return [...out];
+}
+// Similarity above which an item counts as close (vectors of gemini-embedding-001), and how far below the best one.
+const MIN_SCORE = 0.6, SPREAD = 0.08;
+// Context of an analysis with search memory: the subject chosen before recording and the pinned ones, those named in
+// the video, those closest in meaning, then the most recent until the budget is used; the others by their title.
+// scores: Map key ('s:id', 'e:id', 'x:id') -> similarity with the video.
+function searchPlan(data, entry, { scores = new Map(), budget = MEMORY_BUDGET } = {}) {
+  const stats = subjectStats(data);
+  const sorted = sortedSubjects(data, stats);
+  const pick = (prefix, list, max, spread = SPREAD) => {
+    const r = list.map((x) => ({ x, sc: scores.get(prefix + x.id) || 0 })).filter((y) => y.sc >= MIN_SCORE).sort((a, b) => b.sc - a.sc);
+    const best = r.length ? r[0].sc : 0;
+    return r.filter((y) => y.sc >= best - spread).slice(0, max).map((y) => y.x);
+  };
+  const plan = { mode: 'search', full: [], recent: 0, found: [], videos: [], steps: [], total: sorted.length };
+  plan.videos = pick('e:', data.entries.filter((x) => x.id !== entry.id && x.analysis && x.date < entry.date - 14 * DAY), 5, 0.05).map((x) => x.id);
+  const active = progressOf(data).items.filter((x) => x.status === 'active' && x.kind !== 'done' && (!x.now || x.now.entry !== entry.id));
+  plan.steps = pick('x:', active.slice(0, -30), 8).map((x) => x.id);
+  const words = ' ' + norm(queryText(entry)) + ' ';
+  const named = sorted.filter((s) => namesIn(s.titre).some((w) => words.includes(' ' + w + ' '))).slice(0, 10);
+  const must = sorted.filter((s) => s.epingle || s.id === entry.intention);
+  let left = budget - tokensOf(entryContext(data, entry, plan).join('\n'));
+  const has = new Set();
+  const take = (s) => {
+    if (has.has(s.id)) return true;
+    const cost = tokensOf(subjectLines(s, stats).join('\n'));
+    if (cost > left) return false;
+    has.add(s.id); plan.full.push(s.id); left -= cost;
+    return true;
+  };
+  for (const s of [...must, ...named, ...pick('s:', sorted, 12)]) take(s);
+  for (const s of sorted) if (!take(s)) break;
+  let k = 0;
+  while (k < sorted.length && has.has(sorted[k].id)) k++;
+  const prefix = new Set(sorted.slice(0, k).map((s) => s.id));
+  plan.recent = k;
+  plan.found = plan.full.filter((id) => !prefix.has(id));
+  return plan;
+}
+// Size of what an analysis would send about the journal, in tokens (about 4 characters each).
+const contextTokens = (data, entry, mode = 'all') => tokensOf(entryContext(data, entry, { mode }).join('\n'));
+// Without search memory: everything when it fits, otherwise the most recent.
+const defaultPlan = (data, entry) => (contextTokens(data, entry, 'all') <= MEMORY_BUDGET ? { mode: 'all' } : { mode: 'recent' });
+// What the video card shows about its context ("analysed with…").
+function planSummary(data, plan) {
+  if (!plan || plan.mode === 'all') return { mode: 'all' };
+  const stats = subjectStats(data);
+  const sorted = sortedSubjects(data, stats);
+  if (plan.mode === 'recent') {
+    const shown = Math.min(80, sorted.filter((s) => s.etat !== 'conclu').length) + Math.min(40, sorted.filter((s) => s.etat === 'conclu').length);
+    return { mode: 'recent', shown, total: sorted.length };
+  }
+  return { mode: 'search', full: plan.full, recent: plan.recent, found: plan.found, videos: plan.videos, steps: plan.steps.length, total: plan.total };
+}
+
+// ---------- Permanent facts and clarifications ----------
+// Permanent facts (data.faits): what the person wants Carnet to always know: who is who, a name the transcript gets
+// wrong, a nickname. Sent with every new analysis and summary; they never rewrite what is already written.
+// Clarification of a video (data.precisions): corrects that video once (its card, the subjects it fed, what came from
+// it). Kept with the video, it is only sent again if that video is analysed again.
+// ({ id, text, at, entry: the video it came from, source: 'manual' | 'clarification' | 'check' | 'earlier' })
+const factsOf = (data) => (Array.isArray(data.faits) ? data.faits : []);
+function factsBlock(data) {
+  const list = factsOf(data);
+  if (!list.length) return [];
+  return ['', 'Permanent facts given by the person (always true: they come before the transcript and before what was written so far):', ...list.map((f) => `- ${f.text}`)];
+}
+function clarificationsBlock(data, entry) {
+  const list = (data.precisions || []).filter((p) => p.entry === entry.id);
+  if (!list.length) return [];
+  return ['', 'Clarifications given by the person about this video (always true):', ...list.map((p) => `- ${p.texte}`)];
+}
+// Journal read from the file: clarifications "for the whole journal" of earlier versions become permanent facts.
+function normalizeClarifications(data, d) {
+  const facts = Array.isArray(d.faits) ? d.faits.filter((f) => f && f.id && f.text) : [];
+  const precs = Array.isArray(d.precisions) ? d.precisions.filter((p) => p && p.id && p.texte) : [];
+  for (const p of precs.filter((x) => x.portee === 'journal')) {
+    if (!facts.some((f) => norm(f.text) === norm(p.texte))) facts.push({ id: 'f' + p.id.replace(/^p/, ''), text: p.texte, at: p.at || Date.now(), entry: p.entry || null, source: 'earlier' });
+  }
+  data.faits = facts;
+  data.precisions = precs.filter((x) => x.portee !== 'journal').map((x) => ({ ...x, portee: 'video' }));
+  data.checks = Array.isArray(d.checks) ? d.checks.filter((c) => c && c.id && c.entry && c.about) : [];
+  return data;
+}
+function factEdit(data, a) {
+  data.faits = factsOf(data);
+  const text = clean(a.text, 400);
+  if (a.action === 'add' && text) {
+    if (data.faits.some((f) => norm(f.text) === norm(text))) return null;
+    const f = { id: newItemId('f'), text, at: Date.now(), entry: a.entry || null, source: a.source || 'manual' };
+    data.faits.push(f);
+    return f;
+  }
+  const f = data.faits.find((x) => x.id === a.id);
+  if (!f) return null;
+  if (a.action === 'edit' && text) { f.text = text; f.edited = Date.now(); }
+  if (a.action === 'delete') data.faits = data.faits.filter((x) => x !== f);
+  return f;
+}
+
+function entryContext(data, entry, plan) {
+  plan = plan || defaultPlan(data, entry);
   const want = entry.intention && findSubject(data, entry.intention);
   return [
     `Date: ${promptDay(entry.date)}`,
@@ -1056,22 +1213,24 @@ function entryContext(data, entry) {
     entry.title ? `Title given by the person: ${entry.title}` : null,
     entry.chapters && entry.chapters.length ? `Chapters set by the person: ${entry.chapters.map((c) => `${fmtT(c.t)} ${c.title}`).join(' ; ')}` : null,
     want ? `Before recording, the person chose to talk about: [${want.id}] ${want.titre}` : null,
-    ...precisionsBlock(data, [entry]),
+    ...factsBlock(data),
+    ...clarificationsBlock(data, entry),
     '',
-    subjectsBlock(data),
+    subjectsBlock(data, plan),
+    ...olderVideosBlock(data, plan),
     ...profileBlock(data, entry),
-    ...progressBlock(data, entry),
+    ...progressBlock(data, entry, plan),
     ...lookbackBlock(data, entry),
   ];
 }
-const ENTRY_ANSWER = 'Answer in JSON: titre, resume, idees (every idea, each { texte, moment as m:ss, sujet: the title of the subject it belongs to, as written in the sujets list }), sujets (each subject discussed in this video, existing or new: { id: its id if it already exists, empty otherwise, titre, categorie, evolution: what this video changes compared with before, ou_j_en_suis, a_trancher, pistes, etat, conclusion }), humeur, personnes, a_faire, citation, profile (changes to what is known about the person: { action: add | update | remove, id, text }; empty if the video says nothing new about them), progress (only what the person says this video: { kind: done | understood | moved, text, how: act | see | none, situation, subject: the title of its subject, moment as m:ss, since: the ref of the plan it closes, if any }), links (earlier realizations or things left behind that this video meets: { id, effect: applied | against | similar, note, moment as m:ss }).';
+const ENTRY_ANSWER = 'Answer in JSON: titre, resume, idees (every idea, each { texte, moment as m:ss, sujet: the title of the subject it belongs to, as written in the sujets list }), sujets (each subject discussed in this video, existing or new: { id: its id if it already exists, empty otherwise, titre, categorie, evolution: what this video changes compared with before, ou_j_en_suis, a_trancher, pistes, etat, conclusion }), humeur, personnes, a_faire, citation, profile (changes to what is known about the person: { action: add | update | remove, id, text }; empty if the video says nothing new about them), progress (only what the person says this video: { kind: done | understood | moved, text, how: act | see | none, situation, subject: the title of its subject, moment as m:ss, since: the ref of the plan it closes, if any }), links (earlier realizations or things left behind that this video meets: { id, effect: applied | against | similar, note, moment as m:ss }), checks (only real confusions with what the journal already says, as explained in the instructions: { about, before: what the journal says, now: what this video says, subject: the id of the subject concerned, fact: the id of the fact about the person concerned }; empty most of the time).';
 
-function entryPrompt(data, entry) {
+function entryPrompt(data, entry, plan) {
   const lines = (entry.transcript.segments || []).map((s) => `[${fmtT(s.from)}] ${s.text}`).join('\n');
   return [
     'Task: write the card of this journal video and update its subjects, following the instructions.',
     '',
-    ...entryContext(data, entry),
+    ...entryContext(data, entry, plan),
     '',
     'Automatic transcript, with times:',
     lines || '(no speech detected)',
@@ -1081,15 +1240,32 @@ function entryPrompt(data, entry) {
 }
 
 // Same request, but Gemini receives the sound of the video and also writes the transcript.
-function entryAudioPrompt(data, entry) {
+const TRANSCRIPT_RULE = 'Transcript: word for word, exactly what is said, in order, in the language spoken. Keep hesitations (um, er, like), repetitions, sentences left unfinished, slang, words from other languages and grammar mistakes as they are said. Rephrase nothing, correct nothing, summarise nothing, skip nothing. Only add punctuation. Split into sentences or short passages; for each passage, debut = the moment it starts in the sound, as m:ss (or h:mm:ss). If nothing is said, return an empty list.';
+function entryAudioPrompt(data, entry, plan) {
   return [
     'Task: the attached sound is a journal video. Transcribe it, then write the card of the video and update its subjects, following the instructions.',
     '',
-    ...entryContext(data, entry),
+    ...entryContext(data, entry, plan),
     '',
-    'Transcript: word for word, exactly what is said, in order, in the language spoken. Keep hesitations (um, er, like), repetitions, sentences left unfinished, slang, words from other languages and grammar mistakes as they are said. Rephrase nothing, correct nothing, summarise nothing, skip nothing. Only add punctuation. Split into sentences or short passages; for each passage, debut = the moment it starts in the sound, as m:ss (or h:mm:ss). If nothing is said, return an empty list.',
+    TRANSCRIPT_RULE,
     '',
     ENTRY_ANSWER.replace('Answer in JSON: ', 'Answer in JSON: transcription (list of { debut, texte }), '),
+  ].filter((x) => x !== null).join('\n');
+}
+
+// Transcript only: with search memory, the transcript comes first so that the search can read it, then the card.
+function transcriptPrompt(data, entry) {
+  return [
+    'Task: the attached sound is a journal video. Only transcribe it (the card is written afterwards, in another request).',
+    '',
+    `Date: ${promptDay(entry.date)}`,
+    entry.title ? `Title given by the person: ${entry.title}` : null,
+    ...factsBlock(data),
+    ...clarificationsBlock(data, entry),
+    '',
+    TRANSCRIPT_RULE,
+    '',
+    'Answer in JSON: transcription (list of { debut, texte }).',
   ].filter((x) => x !== null).join('\n');
 }
 
@@ -1126,6 +1302,12 @@ const emptyAnalysis = (titre) => ({ titre: titre || t('No speech'), resume: '', 
 // Applies Gemini's answer to an entry: card, ideas linked to subjects, subjects and profile updated.
 function applyEntryAnalysis(data, e, raw, meta = {}) {
   const plans = planList(data, e); // before the subjects change: the refs given in the request
+  // Differences with what the journal said, read before the subjects change (where the journal version came from).
+  const checks = checksFromAnalysis(data, e, raw);
+  // Search memory: a subject sent by its title only keeps what is still to decide and its leads when the answer gives
+  // none (Gemini did not see them).
+  const ctx = meta.context;
+  const titleOnly = ctx && ctx.mode === 'search' && Array.isArray(ctx.full) ? new Set(data.sujets.filter((s) => !ctx.full.includes(s.id)).map((s) => s.id)) : new Set();
   const keys = new Map(); // normalised title or id returned by Gemini -> subject
   const evolutions = []; // what the video changes, subject by subject
   for (const m of (Array.isArray(raw.sujets) ? raw.sujets : []).map(normalizeSubject)) {
@@ -1142,8 +1324,8 @@ function applyEntryAnalysis(data, e, raw, meta = {}) {
       if (m.ou_j_en_suis) s.ou_j_en_suis = m.ou_j_en_suis;
       s.evolution = m.evolution;
       if (m.evolution) evolutions.push({ sujet: s.id, texte: m.evolution });
-      s.a_trancher = m.a_trancher;
-      s.pistes = m.pistes;
+      s.a_trancher = titleOnly.has(s.id) && !m.a_trancher.length ? s.a_trancher : m.a_trancher;
+      s.pistes = titleOnly.has(s.id) && !m.pistes.length ? s.pistes : m.pistes;
       s.etat = m.etat;
       s.conclusion = m.conclusion;
       s.majLe = e.date;
@@ -1184,6 +1366,9 @@ function applyEntryAnalysis(data, e, raw, meta = {}) {
   const pr = applyProgress(data, e, raw, plans);
   e.analysis.progressAdded = pr.added;
   e.analysis.progressLinks = pr.linked;
+  // What does not fit with the journal: to check (a video analysed again replaces its own).
+  data.checks = checksOf(data).filter((c) => c.entry !== e.id);
+  for (const c of checks) data.checks.push({ id: newItemId('c'), entry: e.id, ...c, at: Date.now() });
   return e.analysis;
 }
 
@@ -1199,7 +1384,7 @@ function rebuildPrompt(data) {
   const cur = data.sujets.map((s) => `- ${s.titre}${s.etat === 'conclu' ? ' (concluded)' : ''}`);
   return [
     'Task: reorganise the subjects of the journal, following the instructions. Each idea below has a reference (for example e12ab#3): put each idea in one subject.',
-    ...precisionsBlock(data, list),
+    ...factsBlock(data),
     `${list.length} video(s), in chronological order:`,
     '',
     cards.join('\n\n'),
@@ -1280,7 +1465,7 @@ function periodBlock(data, list, now) {
   const asleep = sortedSubjects(data, stats).filter((s) => s.etat !== 'conclu' && !touched.has(s.id)).slice(0, 30)
     .map((s) => `- ${s.titre} (last time on ${promptShort(stats.get(s.id).last)})`);
   return [
-    ...precisionsBlock(data, list),
+    ...factsBlock(data),
     `${list.length} video(s), in chronological order:`,
     '',
     cards.join('\n\n'),
@@ -1368,119 +1553,169 @@ function nextWeekToDo(data, now = Date.now()) {
   return weeksWithVideos(data).find((k) => weekTo(k) < now && (!data.semaines[k] || data.semaines[k].enCours)) || null;
 }
 
-// ---------- Applying the clarifications to the whole journal ----------
-// One call: Gemini reads everything written so far (cards, subjects, summaries, weeks, profile) with the
-// clarifications, and returns only what changes, rewritten. Two subjects that are actually the same are merged.
-function correctionPrompt(data) {
-  const done = data.entries.filter((e) => e.analysis).sort((a, b) => a.date - b.date);
-  const sub = (id) => (data.sujets.find((s) => s.id === id) || {}).titre;
-  const items = (arr) => arr.map((it) => `  - ${it.sujet && sub(it.sujet) ? sub(it.sujet) + ': ' : it.titre ? it.titre + ': ' : ''}${it.texte}`).join('\n');
-  const fiches = done.map((e) => [
-    `[${e.id}] ${promptDay(e.date)} · ${entryTitle(e)}`,
-    e.analysis.resume ? `Summary: ${e.analysis.resume}` : null,
-    (e.analysis.personnes || []).length ? `People: ${e.analysis.personnes.join(', ')}` : null,
-    ...e.analysis.idees.map((i, k) => `- ${e.id}#${k} (${sub(i.sujet) || 'no subject'}) ${i.texte}`),
-  ].filter(Boolean).join('\n'));
-  const sujets = data.sujets.map((s) => [
-    `[${s.id}] ${s.titre}${s.categorie ? ' · ' + s.categorie : ''} · ${s.etat === 'conclu' ? 'concluded' : 'open'}`,
-    s.evolution ? `  Last change: ${s.evolution}` : null,
-    s.ou_j_en_suis ? `  Where they're at: ${s.ou_j_en_suis}` : null,
-    s.a_trancher.length ? `  Still to decide: ${s.a_trancher.join(' ; ')}` : null,
-    s.pistes.length ? `  Leads: ${s.pistes.join(' ; ')}` : null,
-    s.conclusion ? `  Conclusion: ${s.conclusion}` : null,
-  ].filter(Boolean).join('\n'));
-  const bilan = (b, title) => [
-    `[${b.id}] ${title}`,
-    b.evolution_semaine ? `  Compared with the week before: ${b.evolution_semaine}` : null,
-    (b.suivi || []).length ? `  Follow-up: ${b.suivi.join(' ; ')}` : null,
-    b.en_bref ? `  In short: ${b.en_bref}` : null,
-    b.avance.length ? '  What moved forward:\n' + items(b.avance) : null,
-    b.en_suspens.length ? '  Left hanging:\n' + items(b.en_suspens) : null,
-    b.contradictions.length ? `  To clarify: ${b.contradictions.join(' ; ')}` : null,
-    b.a_dire.length ? `  Next: ${b.a_dire.join(' ; ')}` : null,
-  ].filter(Boolean).join('\n');
-  const bilans = [
-    ...Object.values(data.semaines || {}).sort((a, b) => a.from - b.from).map((w) => bilan(w, `week of ${promptShort(w.from)} to ${promptShort(w.to)}`)),
-    ...data.bilans.map((b) => bilan(b, `${PERIODS[b.period] || b.label}, from ${promptShort(b.from)} to ${promptShort(b.to)}`)),
-  ];
-  const p = profileOf(data);
-  return [
-    'Task: apply the person\'s clarifications to the whole journal, following the instructions. Return only what changes.',
-    ...precisionsBlock(data, done, { markNew: true }),
-    '',
-    `Video cards (${done.length}):`, '', fiches.join('\n\n') || '(none)',
-    '', `Subjects (${data.sujets.length}):`, '', sujets.join('\n\n') || '(none)',
-    '', `Summaries (${bilans.length}):`, '', bilans.join('\n\n') || '(none)',
-    '', `About the person (${p.facts.length}):`, '', p.facts.map((f) => `[${f.id}] ${f.text}`).join('\n') || '(none)',
-    '',
-    'Answer in JSON: fiches (only those that change: { id, titre, resume, personnes, idees: only the ideas that change, { ref, texte } }), sujets (only those that change: { id, titre, evolution, ou_j_en_suis, a_trancher, pistes, conclusion }), bilans (only those that change: { id, evolution_semaine, suivi, en_bref, avance, en_suspens, contradictions, a_dire }), fusions (subjects that are actually the same: { de, vers }), profile (facts about the person that change: { id, text }). An empty or missing field = unchanged.',
-  ].join('\n');
+// ---------- Correcting one video ----------
+// The person's clarification about a video, applied once: the card of the video, the subjects it fed, the facts about
+// the person and the steps forward that came from it. The rest of the journal is not sent and not touched.
+// The subjects of a video: those of its ideas and those it changed.
+function videoSubjects(data, e) {
+  const a = e.analysis || {};
+  const ids = new Set([...(a.idees || []).map((i) => i.sujet), ...(a.evolutions || []).map((x) => x.sujet)].filter(Boolean));
+  return data.sujets.filter((s) => ids.has(s.id));
 }
-function applyCorrections(data, raw) {
-  const n = { fiches: 0, idees: 0, sujets: 0, bilans: 0, fusions: 0, profile: 0 };
+const subjectDetail = (s) => [
+  `[${s.id}] ${s.titre}${s.categorie ? ' · ' + s.categorie : ''} · ${s.etat === 'conclu' ? 'concluded' : 'open'}`,
+  s.evolution ? `  Last change: ${s.evolution}` : null,
+  s.ou_j_en_suis ? `  Where they're at: ${s.ou_j_en_suis}` : null,
+  (s.a_trancher || []).length ? `  Still to decide: ${s.a_trancher.join(' ; ')}` : null,
+  (s.pistes || []).length ? `  Leads: ${s.pistes.join(' ; ')}` : null,
+  s.conclusion ? `  Conclusion: ${s.conclusion}` : null,
+].filter(Boolean).join('\n');
+const MAX_FIX_TRANSCRIPT = 40000; // characters; a longer transcript is left out of the correction
+function videoFixPrompt(data, e, texts) {
+  const a = e.analysis;
+  const sub = (id) => (data.sujets.find((s) => s.id === id) || {}).titre;
+  const mine = videoSubjects(data, e);
+  const others = sortedSubjects(data).filter((s) => !mine.includes(s)).slice(0, 300);
+  const steps = progressOf(data).items.filter((x) => x.source === 'video' && x.now && x.now.entry === e.id);
+  const facts = profileOf(data).facts;
+  const tr = ((e.transcript && e.transcript.segments) || []).map((x) => `[${fmtT(x.from)}] ${x.text}`).join('\n');
+  return [
+    'Task: correct this video with the person\'s clarification, following the instructions. Return only what changes.',
+    '',
+    'Clarification given by the person about this video (always true):',
+    ...texts.map((x) => `- ${x}`),
+    ...factsBlock(data),
+    '',
+    `Card of the video [${e.id}], ${promptDay(e.date)}:`,
+    `Title: ${a.titre}`,
+    a.resume ? `Summary: ${a.resume}` : null,
+    (a.personnes || []).length ? `People: ${a.personnes.join(', ')}` : null,
+    a.humeur ? `Mood: ${a.humeur}` : null,
+    (a.a_faire || []).length ? `To do: ${a.a_faire.join(' ; ')}` : null,
+    a.citation ? `Quote: ${a.citation}` : null,
+    'Ideas:',
+    ...(a.idees || []).map((i, k) => `- ${e.id}#${k} (${sub(i.sujet) || 'no subject'}) ${i.texte}`),
+    '',
+    `Subjects this video talks about (${mine.length}):`,
+    mine.map(subjectDetail).join('\n\n') || '(none)',
+    '',
+    'About the person (ids in brackets):',
+    facts.length ? facts.map((f) => `[${f.id}] ${f.text}`).join('\n') : '(nothing yet)',
+    '',
+    'Steps forward that came from this video (ids in brackets):',
+    steps.length ? steps.map((x) => `[${x.id}] (${x.kind}) ${x.situation ? x.situation + ': ' : ''}${x.text}`).join('\n') : '(none)',
+    ...(others.length ? ['', 'Other subjects of the journal (only to merge a subject of this video into one of them, when the clarification shows they are the same):', ...others.map((x) => `[${x.id}] ${x.titre}`)] : []),
+    ...(tr && tr.length <= MAX_FIX_TRANSCRIPT ? ['', 'Transcript of the video, to check what was actually said:', tr] : []),
+    '',
+    'Answer in JSON: fiche ({ titre, resume, personnes, humeur, a_faire, citation, idees: only the ideas that change, { ref, texte } }), sujets (only those that change: { id, titre, evolution, ou_j_en_suis, a_trancher, pistes, conclusion }), profile (facts about the person that change: { id, text }), progress (steps forward that change: { id, text, situation }), fusions (subjects that are actually the same: { de, vers }), fait (the clarification as one short sentence to keep for every next video, when it stays true beyond this video: who someone is, a name, a word; empty when it only concerns this video). An empty or missing field = unchanged.',
+  ].filter((x) => x !== null).join('\n');
+}
+function applyVideoFix(data, e, raw) {
+  const n = { fiche: 0, idees: 0, sujets: 0, profile: 0, progress: 0, fusions: 0 };
   const txt = (x) => String(x || '').trim();
-  for (const f of Array.isArray(raw.fiches) ? raw.fiches : []) {
-    const e = data.entries.find((x) => x.id === txt(f.id).replace(/[[\]]/g, ''));
-    if (!e || !e.analysis) continue;
-    let changed = false;
-    if (txt(f.titre)) { e.analysis.titre = txt(f.titre).replace(/\.$/, ''); changed = true; }
-    if (txt(f.resume)) { e.analysis.resume = txt(f.resume); changed = true; }
-    if (strList(f.personnes).length) { e.analysis.personnes = strList(f.personnes); changed = true; }
-    for (const i of Array.isArray(f.idees) ? f.idees : []) {
-      const m = /#(\d+)$/.exec(txt(i.ref));
-      const idea = m && e.analysis.idees[Number(m[1])];
-      if (idea && txt(i.texte)) { idea.texte = txt(i.texte); n.idees++; changed = true; }
-    }
-    if (changed) { e.analysis.corrige = Date.now(); n.fiches++; }
+  const a = e.analysis;
+  const f = raw.fiche && typeof raw.fiche === 'object' ? raw.fiche : {};
+  for (const k of ['titre', 'resume', 'humeur', 'citation']) {
+    const v = k === 'titre' ? txt(f[k]).replace(/\.$/, '') : txt(f[k]);
+    if (v && v !== a[k]) { a[k] = v; n.fiche++; }
   }
-  // Merges first: the corrected state returned for the remaining subject then replaces that of the merge.
-  for (const f of Array.isArray(raw.fusions) ? raw.fusions : []) {
-    const a = findSubject(data, txt(f.de)), b = findSubject(data, txt(f.vers));
-    if (a && b && a !== b && mergeSubjects(data, a.id, b.id)) {
-      // Summaries that mentioned the merged subject point to the remaining one.
-      for (const bl of [...data.bilans, ...Object.values(data.semaines || {})]) for (const it of [...bl.avance, ...bl.en_suspens]) if (it.sujet === a.id) it.sujet = b.id;
+  for (const k of ['personnes', 'a_faire']) {
+    const v = strList(f[k]);
+    if (v.length && JSON.stringify(v) !== JSON.stringify(a[k] || [])) { a[k] = v; n.fiche++; }
+  }
+  for (const i of Array.isArray(f.idees) ? f.idees : []) {
+    const m = /#(\d+)$/.exec(txt(i.ref));
+    const idea = m && (a.idees || [])[Number(m[1])];
+    if (idea && txt(i.texte) && txt(i.texte) !== idea.texte) { idea.texte = txt(i.texte); n.idees++; }
+  }
+  // Merges first, and only with a subject of this video: the corrected state then replaces that of the merge.
+  const mine = new Set(videoSubjects(data, e).map((x) => x.id));
+  for (const fu of Array.isArray(raw.fusions) ? raw.fusions : []) {
+    const x = findSubject(data, txt(fu.de)), y = findSubject(data, txt(fu.vers));
+    if (!x || !y || x === y || !(mine.has(x.id) || mine.has(y.id))) continue;
+    if (mergeSubjects(data, x.id, y.id)) {
+      for (const bl of [...data.bilans, ...Object.values(data.semaines || {})]) for (const it of [...(bl.avance || []), ...(bl.en_suspens || [])]) if (it.sujet === x.id) it.sujet = y.id;
+      if (mine.has(x.id)) mine.add(y.id);
       n.fusions++;
     }
   }
   for (const c of Array.isArray(raw.sujets) ? raw.sujets : []) {
     const s = data.sujets.find((x) => x.id === txt(c.id).replace(/[[\]]/g, ''));
-    if (!s) continue;
+    if (!s || !mine.has(s.id)) continue;
     const before = JSON.stringify([s.titre, s.evolution, s.ou_j_en_suis, s.a_trancher, s.pistes, s.conclusion]);
-    if (txt(c.ou_j_en_suis) && txt(c.ou_j_en_suis) !== s.ou_j_en_suis) remember(s, 'precision');
-    if (txt(c.titre)) s.titre = txt(c.titre).replace(/\.$/, '');
-    if (txt(c.evolution)) s.evolution = txt(c.evolution);
-    if (txt(c.ou_j_en_suis)) s.ou_j_en_suis = txt(c.ou_j_en_suis);
-    if (strList(c.a_trancher).length) s.a_trancher = strList(c.a_trancher);
-    if (strList(c.pistes).length) s.pistes = strList(c.pistes);
-    if (txt(c.conclusion) && s.etat === 'conclu') s.conclusion = txt(c.conclusion);
-    if (JSON.stringify([s.titre, s.evolution, s.ou_j_en_suis, s.a_trancher, s.pistes, s.conclusion]) !== before) { s.majSource = 'precision'; n.sujets++; }
-  }
-  const mapItems = (x) => (Array.isArray(x) ? x : []).map((it) => {
-    const s = findSubject(data, it.sujet);
-    return { sujet: s ? s.id : null, titre: s ? s.titre : txt(it.sujet), texte: txt(it.texte) };
-  }).filter((it) => it.texte);
-  for (const c of Array.isArray(raw.bilans) ? raw.bilans : []) {
-    const id = txt(c.id).replace(/[[\]]/g, '');
-    const b = data.bilans.find((x) => x.id === id) || Object.values(data.semaines || {}).find((w) => w.id === id);
-    if (!b) continue;
-    let changed = false;
-    for (const k of ['en_bref', 'evolution_semaine']) if (txt(c[k]) && (k in b || k === 'en_bref')) { b[k] = txt(c[k]); changed = true; }
-    for (const k of ['suivi', 'contradictions', 'a_dire']) if (strList(c[k]).length && (k in b)) { b[k] = strList(c[k]); changed = true; }
-    for (const k of ['avance', 'en_suspens']) if (mapItems(c[k]).length) { b[k] = mapItems(c[k]); changed = true; }
-    if (changed) { b.corrige = Date.now(); n.bilans++; }
+    const next = { ...s };
+    if (txt(c.titre)) next.titre = txt(c.titre).replace(/\.$/, '');
+    if (txt(c.evolution)) next.evolution = txt(c.evolution);
+    if (txt(c.ou_j_en_suis)) next.ou_j_en_suis = txt(c.ou_j_en_suis);
+    if (strList(c.a_trancher).length) next.a_trancher = strList(c.a_trancher);
+    if (strList(c.pistes).length) next.pistes = strList(c.pistes);
+    if (txt(c.conclusion) && s.etat === 'conclu') next.conclusion = txt(c.conclusion);
+    if (JSON.stringify([next.titre, next.evolution, next.ou_j_en_suis, next.a_trancher, next.pistes, next.conclusion]) === before) continue;
+    // The state before the correction stays in the history.
+    remember(s, 'precision');
+    Object.assign(s, { titre: next.titre, evolution: next.evolution, ou_j_en_suis: next.ou_j_en_suis, a_trancher: next.a_trancher, pistes: next.pistes, conclusion: next.conclusion, majSource: 'precision' });
+    n.sujets++;
   }
   const p = profileOf(data);
   for (const c of Array.isArray(raw.profile) ? raw.profile : []) {
-    const f = p.facts.find((x) => x.id === txt(c.id).replace(/[[\]]/g, ''));
-    if (f && txt(c.text) && txt(c.text) !== f.text) {
-      f.history = [...(f.history || []), { text: f.text, at: f.at, entry: f.entry || null, source: f.source }].slice(-10);
-      f.text = clean(c.text);
-      f.at = Date.now();
+    const pf = p.facts.find((x) => x.id === txt(c.id).replace(/[[\]]/g, ''));
+    if (pf && txt(c.text) && txt(c.text) !== pf.text) {
+      pf.history = [...(pf.history || []), { text: pf.text, at: pf.at, entry: pf.entry || null, source: pf.source }].slice(-10);
+      pf.text = clean(c.text);
+      pf.at = Date.now();
       n.profile++;
     }
   }
-  for (const pr of data.precisions || []) { pr.appliquee = true; pr.appliqueeLe = Date.now(); }
-  return n;
+  for (const c of Array.isArray(raw.progress) ? raw.progress : []) {
+    const it = progressOf(data).items.find((x) => x.id === txt(c.id).replace(/[[\]]/g, '') && x.now && x.now.entry === e.id);
+    if (!it) continue;
+    let changed = false;
+    if (txt(c.text) && clean(c.text, 300) !== it.text) { it.text = clean(c.text, 300); changed = true; }
+    if (txt(c.situation) && it.kind === 'understood' && clean(c.situation, 200) !== it.situation) { it.situation = clean(c.situation, 200); changed = true; }
+    if (changed) n.progress++;
+  }
+  if (n.fiche || n.idees || n.sujets || n.profile || n.progress || n.fusions) a.corrige = Date.now();
+  // The clarifications of this video are now applied.
+  for (const pr of data.precisions || []) if (pr.entry === e.id && !pr.appliquee) { pr.appliquee = true; pr.appliqueeLe = Date.now(); }
+  // A check about this video may no longer apply: it says so.
+  for (const c of checksOf(data)) if (c.entry === e.id || c.beforeEntry === e.id) c.corrected = Date.now();
+  pruneSubjects(data);
+  return { ...n, fait: clean(raw.fait, 300) };
+}
+
+// ---------- To check: what does not fit with what the journal already says ----------
+// The analysis of a video sorts each difference with the journal: a change of feelings, opinions or plans is an
+// evolution (nothing to check); a fact the video says has changed replaces the old one; two incompatible versions
+// with no change said (Sam is the neighbour, then a colleague) are a confusion: the journal keeps its version and the
+// difference comes here, for the person to decide.
+// data.checks: { id, entry: the video that says something else, about, before: what the journal said, now: what the
+// video says, subject, fact: the fact about the person concerned, beforeEntry: the video the journal version comes
+// from, at }
+const checksOf = (data) => (Array.isArray(data.checks) ? data.checks : []);
+function checksFromAnalysis(data, e, raw) {
+  const p = profileOf(data);
+  return (Array.isArray(raw.checks) ? raw.checks : []).map((c) => {
+    const about = clean(c.about, 120), before = clean(c.before, 300), now = clean(c.now, 300);
+    if (!about || !before || !now || norm(before) === norm(now)) return null;
+    const s = c.subject ? findSubject(data, String(c.subject)) : null;
+    const pf = c.fact ? p.facts.find((x) => x.id === String(c.fact).replace(/[[\]\s]/g, '')) : null;
+    const from = (pf && pf.entry && pf.entry !== e.id && pf.entry) || (s && s.majPar && s.majPar !== e.id && s.majPar) || null;
+    return { about, before, now, subject: s ? s.id : null, fact: pf ? pf.id : null, beforeEntry: from };
+  }).filter(Boolean).slice(0, 5);
+}
+// The person's answer: 'before' (the journal was right), 'now' (the video is right) or 'both' (both are true).
+// Returns the correction to make, if any ({ entry, text }), and the permanent fact that the answer gives.
+function checkAnswer(data, id, choice, now = Date.now()) {
+  const c = checksOf(data).find((x) => x.id === id);
+  if (!c) return null;
+  data.checks = checksOf(data).filter((x) => x !== c);
+  const exists = (eid) => eid && data.entries.some((x) => x.id === eid && x.analysis);
+  if (choice === 'before') return { check: c, fix: exists(c.entry) ? { entry: c.entry, text: t('{about}: {right}, not {wrong}.', { about: c.about, right: c.before, wrong: c.now }) } : null, fact: `${c.about}: ${c.before}` };
+  if (choice === 'now') {
+    const where = exists(c.beforeEntry) ? c.beforeEntry : exists(c.entry) ? c.entry : null;
+    return { check: c, fix: where ? { entry: where, text: t('{about}: {right}, not {wrong}.', { about: c.about, right: c.now, wrong: c.before }) } : null, fact: `${c.about}: ${c.now}` };
+  }
+  return { check: c, fix: null, fact: t('{about}: {a} and {b}.', { about: c.about, a: c.before, b: c.now }) };
 }
 
 // ---------- Markdown ----------
@@ -1664,12 +1899,20 @@ function fullText(data, { settings = {}, instructions = '' } = {}) {
     if (b.contradictions.length) L.push(`**${t('To clarify')}**`, '', ...b.contradictions.map((x) => `- ${x}`), '');
     if (b.a_dire.length) L.push(`**${t('For the next video')}**`, '', ...b.a_dire.map((x) => `- ${x}`), '');
   }
-  L.push('---', '', `# 2 bis. ${t('Your clarifications')}`, '');
-  if (!(data.precisions || []).length) L.push(`_${t('None.')}_`, '');
-  for (const p of data.precisions || []) {
-    const e = p.entry && data.entries.find((x) => x.id === p.entry);
-    const where = p.portee === 'journal' ? t('whole journal') : e ? t('video of {date} · {title}', { date: shortDay(e.date), title: entryTitle(e) }) : t('removed video');
-    L.push(`- ${p.texte} _(${where}, ${dayLabel(p.at)}${p.appliquee ? '' : ', ' + t('not applied yet')})_`);
+  L.push('---', '', `# 2 bis. ${t('Permanent facts')}`, '');
+  if (!factsOf(data).length) L.push(`_${t('None.')}_`, '');
+  for (const f of factsOf(data)) L.push(`- ${f.text} _(${dayLabel(f.at)})_`);
+  if ((data.precisions || []).length) {
+    L.push('', `## ${t('Clarifications on videos')}`, '');
+    for (const p of data.precisions) {
+      const e = p.entry && data.entries.find((x) => x.id === p.entry);
+      const where = e ? t('video of {date} · {title}', { date: shortDay(e.date), title: entryTitle(e) }) : t('removed video');
+      L.push(`- ${p.texte} _(${where}, ${dayLabel(p.at)}${p.appliquee ? '' : ', ' + t('not applied yet')})_`);
+    }
+  }
+  if (checksOf(data).length) {
+    L.push('', `## ${t('To check')}`, '');
+    for (const c of checksOf(data)) L.push(`- ${c.about}: ${c.before} / ${c.now}`);
   }
   // How far you've come (written comparisons) and the look-backs.
   const P = progressOf(data);
@@ -1716,11 +1959,13 @@ module.exports = {
   DATA_FILE, MD_FILE, INSTRUCTIONS_FILE, TRANSCRIPTS_DIR, OLD_TRANSCRIPTS_DIR, PERIODS, periodLabel,
   fmtT, parseT, monthKey, monthLabel, dayLabel, shortDay, norm,
   parseWhisperJson, sections, load, save, newId, ensureInstructions, readInstructions, languageRule, hasIdeas,
-  entryPrompt, entryAudioPrompt, segmentsFromGemini, emptyAnalysis, applyEntryAnalysis,
+  entryPrompt, entryAudioPrompt, transcriptPrompt, segmentsFromGemini, emptyAnalysis, applyEntryAnalysis,
+  MEMORY_BUDGET, memoryTexts, queryChunks, searchPlan, contextTokens, defaultPlan, planSummary, namesIn, subjectsBlock,
   rebuildPrompt, applyRebuild, periodEntries, bilanPrompt, normalizeBilan,
   weekKey, weekLabel, weekEntries, weeksWithVideos, weeklyPrompt, normalizeWeekly, nextWeekToDo,
   subjectStats, sortedSubjects, pruneSubjects, mergeSubjects, deleteSubject, findSubject, remember, stateBefore, BACKUP_DIR,
-  renderMarkdown, entryTitle, momentLink, fullText, precisionsBlock, correctionPrompt, applyCorrections,
+  renderMarkdown, entryTitle, momentLink, fullText, factsBlock, clarificationsBlock, factsOf, factEdit, normalizeClarifications,
+  videoSubjects, videoFixPrompt, applyVideoFix, checksOf, checksFromAnalysis, checkAnswer,
   normalizeProfile, profileOf, applyProfileOps, profileEdit, reviewPrompt, applyReview, recentEntries, ANGLES,
   normalizeProgress, progressOf, planList, progressBlock, applyProgress, syncSettled, fadingSubjects, progressEdit, REVIEW_DAYS, dueItems, monthAgo, reminderText,
   lookbackFrom, lookbackMaterial, lookbackState, lookbackOpen, lookbackPrompt, applyLookbackQuestions, lookbackRecorded,

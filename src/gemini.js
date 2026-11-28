@@ -180,6 +180,37 @@ async function generateJson(fetchFn, { key, model, system, prompt, schema, audio
   }
 }
 
+// Vectors for search memory: one per text, in one request (at most 100 texts). They do not count in the day's calls
+// (separate quota). task: RETRIEVAL_DOCUMENT for what is kept, RETRIEVAL_QUERY for what is searched. Returns unit
+// vectors (Float32Array). The options go in embedContentConfig; if the API does not know it yet, the older fields.
+const EMBED_MODEL = 'gemini-embedding-001';
+const EMBED_DIMS = 768;
+function unit(values) {
+  const v = Float32Array.from(values || []);
+  let n = 0;
+  for (const x of v) n += x * x;
+  n = Math.sqrt(n) || 1;
+  for (let i = 0; i < v.length; i++) v[i] /= n;
+  return v;
+}
+async function embed(fetchFn, { key, texts, task = 'RETRIEVAL_DOCUMENT', model = EMBED_MODEL, dims = EMBED_DIMS }) {
+  const path = `models/${encodeURIComponent(model)}:batchEmbedContents`;
+  const body = (legacy) => ({
+    requests: texts.map((text) => (legacy
+      ? { model: `models/${model}`, content: { parts: [{ text }] }, taskType: task, outputDimensionality: dims }
+      : { model: `models/${model}`, content: { parts: [{ text }] }, embedContentConfig: { taskType: task, outputDimensionality: dims } })),
+  });
+  let data;
+  try { data = await request(fetchFn, key, path, body(false)); }
+  catch (err) {
+    if (!(err.status === 400 && /embedContentConfig|unknown name|invalid json/i.test(err.message))) throw err;
+    data = await request(fetchFn, key, path, body(true));
+  }
+  const out = (data.embeddings || []).map((e) => unit(e.values));
+  if (out.length !== texts.length || out.some((v) => !v.length)) throw new GeminiError(t('Unreadable answer from Gemini ({why}).', { why: 'embeddings' }));
+  return out;
+}
+
 // Response schemas (simplified OpenAPI format accepted by Gemini). Field names in French: those of the journal data.
 const S = (type, extra = {}) => ({ type, ...extra });
 const STR = S('STRING');
@@ -221,20 +252,26 @@ const ENTRY_SCHEMA = S('OBJECT', {
     progress: S('ARRAY', { items: PROGRESS_ITEM }),
     // Earlier realizations (or things left behind) that this video applies, goes against, or meets again.
     links: S('ARRAY', { items: S('OBJECT', { properties: { id: STR, effect: S('STRING', { enum: ['applied', 'against', 'similar'] }), note: STR, moment: STR }, propertyOrdering: ['id', 'effect', 'note', 'moment'], required: ['id', 'effect', 'note'] }) }),
+    // What does not fit with what the journal says, with no change said: for the person to check.
+    checks: S('ARRAY', { items: S('OBJECT', { properties: { about: STR, before: STR, now: STR, subject: STR, fact: STR }, propertyOrdering: ['about', 'before', 'now', 'subject', 'fact'], required: ['about', 'before', 'now'] }) }),
   },
-  propertyOrdering: ['titre', 'resume', 'idees', 'sujets', 'humeur', 'personnes', 'a_faire', 'citation', 'profile', 'progress', 'links'],
+  propertyOrdering: ['titre', 'resume', 'idees', 'sujets', 'humeur', 'personnes', 'a_faire', 'citation', 'profile', 'progress', 'links', 'checks'],
   required: ['titre', 'idees', 'sujets'],
 });
 
 // Same card, plus the transcript of the sound sent.
+const TRANSCRIPTION = S('ARRAY', { items: S('OBJECT', { properties: { debut: STR, texte: STR }, required: ['debut', 'texte'] }) });
 const ENTRY_AUDIO_SCHEMA = S('OBJECT', {
   properties: {
-    transcription: S('ARRAY', { items: S('OBJECT', { properties: { debut: STR, texte: STR }, required: ['debut', 'texte'] }) }),
+    transcription: TRANSCRIPTION,
     ...ENTRY_SCHEMA.properties,
   },
   propertyOrdering: ['transcription', ...ENTRY_SCHEMA.propertyOrdering],
   required: ['transcription', ...ENTRY_SCHEMA.required],
 });
+
+// The transcript alone (search memory: the card comes in a second request).
+const TRANSCRIPT_SCHEMA = S('OBJECT', { properties: { transcription: TRANSCRIPTION }, required: ['transcription'] });
 
 // Reorganisation: the full list of subjects, each with the references of its ideas.
 // A reorganisation has no "previous video": no evolution field.
@@ -252,17 +289,18 @@ const BILAN_SCHEMA = S('OBJECT', {
   propertyOrdering: ['en_bref', 'avance', 'en_suspens', 'contradictions', 'a_dire'],
   required: ['en_bref', 'avance', 'en_suspens', 'a_dire'],
 });
-// Applying the clarifications: only what changes.
-const CORRECTION_SCHEMA = S('OBJECT', {
+// Correcting one video with a clarification: only what changes.
+const VIDEO_FIX_SCHEMA = S('OBJECT', {
   properties: {
-    fiches: S('ARRAY', { items: S('OBJECT', { properties: { id: STR, titre: STR, resume: STR, personnes: LIST, idees: S('ARRAY', { items: S('OBJECT', { properties: { ref: STR, texte: STR }, required: ['ref', 'texte'] }) }) }, required: ['id'] }) }),
+    fiche: S('OBJECT', { properties: { titre: STR, resume: STR, personnes: LIST, humeur: STR, a_faire: LIST, citation: STR, idees: S('ARRAY', { items: S('OBJECT', { properties: { ref: STR, texte: STR }, required: ['ref', 'texte'] }) }) } }),
     sujets: S('ARRAY', { items: S('OBJECT', { properties: { id: STR, titre: STR, evolution: STR, ou_j_en_suis: STR, a_trancher: LIST, pistes: LIST, conclusion: STR }, required: ['id'] }) }),
-    bilans: S('ARRAY', { items: S('OBJECT', { properties: { id: STR, evolution_semaine: STR, suivi: LIST, en_bref: STR, avance: ITEMS, en_suspens: ITEMS, contradictions: LIST, a_dire: LIST }, required: ['id'] }) }),
-    fusions: S('ARRAY', { items: S('OBJECT', { properties: { de: STR, vers: STR }, required: ['de', 'vers'] }) }),
     profile: S('ARRAY', { items: S('OBJECT', { properties: { id: STR, text: STR }, required: ['id', 'text'] }) }),
+    progress: S('ARRAY', { items: S('OBJECT', { properties: { id: STR, text: STR, situation: STR }, required: ['id'] }) }),
+    fusions: S('ARRAY', { items: S('OBJECT', { properties: { de: STR, vers: STR }, required: ['de', 'vers'] }) }),
+    fait: STR,
   },
-  propertyOrdering: ['fiches', 'sujets', 'bilans', 'fusions', 'profile'],
-  required: ['fiches', 'sujets', 'bilans', 'fusions'],
+  propertyOrdering: ['fiche', 'sujets', 'profile', 'progress', 'fusions', 'fait'],
+  required: ['fiche', 'sujets'],
 });
 // Summary of a week: the same as a period, plus the comparison with the previous week.
 const WEEK_SCHEMA = S('OBJECT', {
@@ -310,4 +348,4 @@ const BACKFILL_SCHEMA = S('OBJECT', {
   required: ['progress'],
 });
 
-module.exports = { BACKFILL_SCHEMA, LOOKBACK_SCHEMA, REPORT_SCHEMA, SCALE, DEFAULT_MODEL, quotaDay, nextQuotaReset, usage, listModels, checkTier, classify, withRetry, generateJson, GeminiError, ENTRY_SCHEMA, ENTRY_AUDIO_SCHEMA, REBUILD_SCHEMA, BILAN_SCHEMA, WEEK_SCHEMA, CORRECTION_SCHEMA, REVIEW_SCHEMA };
+module.exports = { BACKFILL_SCHEMA, LOOKBACK_SCHEMA, REPORT_SCHEMA, SCALE, DEFAULT_MODEL, quotaDay, nextQuotaReset, usage, listModels, checkTier, classify, withRetry, generateJson, GeminiError, ENTRY_SCHEMA, ENTRY_AUDIO_SCHEMA, TRANSCRIPT_SCHEMA, REBUILD_SCHEMA, BILAN_SCHEMA, WEEK_SCHEMA, VIDEO_FIX_SCHEMA, REVIEW_SCHEMA, EMBED_MODEL, EMBED_DIMS, embed };

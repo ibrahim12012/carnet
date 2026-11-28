@@ -26,7 +26,7 @@
           <button class="nav-item" data-nav="you">You</button>
           <button class="nav-item" data-nav="progress">Progress <span class="n" id="jNavProgressN"></span></button>
           <button class="nav-item" data-nav="semaines">Weeks <span class="n" id="jNavSemainesN"></span></button>
-          <button class="nav-item" data-nav="precisions">Clarifications <span class="n" id="jNavPrecisionsN"></span></button>
+          <button class="nav-item" data-nav="precisions">Permanent facts <span class="n" id="jNavPrecisionsN"></span></button>
           <button class="nav-item" data-nav="sujets">All subjects <span class="n" id="jNavSujetsN"></span></button>
         </nav>
         <h2>Open subjects</h2>
@@ -361,6 +361,11 @@
         <label class="check"><input type="checkbox" id="setAutoSemaine"> <span>Make the summary of each finished week automatically</span></label>
         <label class="check"><input type="checkbox" id="setAutoBilan"> <span>Redo the summary automatically when there are new videos (at most once a day)</span></label>
         <p class="muted small" id="setUsage"></p>
+        <h3>Search memory</h3>
+        <p class="muted small">When your journal is too big to be sent whole with each video, Carnet sends your most recent subjects in full, finds the older ones close to what the video says (by meaning and by name), and sends the others by their title. The search uses vectors made by Gemini (a separate quota: your calls of the day do not change), kept in search-memory.json in the journal folder.</p>
+        <div class="set-row"><span class="small" id="setMemory"></span><button class="btn small-btn" id="btnMemBuild">Build now</button></div>
+        <h3>Permanent facts</h3>
+        <p class="small" id="setFactsLine"></p>
       </section>
 
       <section class="set-sec" id="setRecSec">

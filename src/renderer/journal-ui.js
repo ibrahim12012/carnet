@@ -166,8 +166,8 @@
     $('jNavProgressN').textContent = due ? tn(due, '{n} to check', '{n} to check') : activeItems().length || '';
     $('jNavSujetsN').textContent = S.sujets.length || '';
     $('jNavSemainesN').textContent = Object.keys(S.semaines || {}).length || '';
-    const pend = (S.precisions || []).filter((p) => !p.appliquee).length;
-    $('jNavPrecisionsN').textContent = pend ? tn(pend, '{n} to apply', '{n} to apply') : (S.precisions || []).length || '';
+    const toCheck = (S.checks || []).length;
+    $('jNavPrecisionsN').textContent = toCheck ? tn(toCheck, '{n} to check', '{n} to check') : (S.faits || []).length || '';
     const open = openSubjects();
     const recent = open.filter((s) => s.epingle || Date.now() - st(s).last < ASLEEP).slice(0, 14);
     $('jSubjects').innerHTML = recent.length
@@ -264,31 +264,14 @@
     </div>`;
   }
 
-  // Clarifications not yet applied to what is already written.
-  function precisionsBanner() {
-    const pend = (S.precisions || []).filter((p) => !p.appliquee);
-    if (S.jobs.precisions) return `<div class="card notice"><span class="status work">${t('Updating the journal with your clarifications…')}</span></div>`;
-    if (!pend.length) return '';
-    return `<div class="card notice">${tn(pend.length, '{n} clarification is not applied yet to what is already written (cards, subjects, summaries). The next analyses already take it into account.', '{n} clarifications are not applied yet to what is already written (cards, subjects, summaries). The next analyses already take them into account.')}
-      <button class="btn small-btn" data-apply-prec ${canCall() && !anyJob() ? '' : 'disabled'} title="${esc(t('Uses 1 Gemini call'))}">${t('Update the whole journal')}</button>
-      <button class="link-btn" data-nav-prec>${t('See the clarifications')}</button></div>`;
-  }
-  async function applyPrecisions() {
-    if (!confirm(t('Update the whole journal with your clarifications? Gemini reads the cards, subjects and summaries again and corrects what the clarifications change (1 call).'))) return;
-    busyMsg = t('Updating with your clarifications');
-    render();
-    try {
-      const r = await window.api.journalApplyPrecisions();
-      S = r.state;
-      const n = r.summary || {};
-      const parts = [n.fiches && tn(n.fiches, '{n} card', '{n} cards'), n.sujets && tn(n.sujets, '{n} subject', '{n} subjects'), n.bilans && tn(n.bilans, '{n} summary', '{n} summaries'), n.fusions && tn(n.fusions, '{n} merge of subjects', '{n} merges of subjects')].filter(Boolean);
-      showToast(parts.length ? t('Journal updated: {list} corrected.', { list: parts.join(', ') }) : t('Journal read again: nothing to correct.'));
-    } catch (err) { showToast(cleanErr(err)); await update(); }
-    busyMsg = null;
-    render();
+  // Things to check: a video says something else than the journal (Permanent facts page).
+  function checksBanner() {
+    const n = (S.checks || []).length;
+    if (!n) return '';
+    return `<div class="card notice">${esc(tn(n, '{n} thing to check: a video says something different from your journal, without saying it changed.', '{n} things to check: videos say something different from your journal, without saying it changed.'))}
+      <button class="btn small-btn" data-nav-prec>${t('Check')}</button></div>`;
   }
   function bindPrecisionButtons() {
-    main().querySelectorAll('[data-apply-prec]').forEach((b) => (b.onclick = applyPrecisions));
     main().querySelectorAll('[data-nav-prec]').forEach((b) => (b.onclick = () => go({ type: 'precisions' })));
   }
 
@@ -314,7 +297,7 @@
       <div class="j-head"><h1>${t('Before you talk')}</h1><span class="muted">${esc(tn(open.length, '{n} open subject', '{n} open subjects'))} · ${esc(t('last video {when}', { when: ago(last.date) }))}</span>
         <div class="spacer"></div><button class="btn record-cta" data-talk=""><span class="dot"></span>${t('New entry')}</button></div>
       ${rebuildBanner()}
-      ${precisionsBanner()}
+      ${checksBanner()}
       ${rememberCard()}
       ${bilanCard()}
       <div class="card"><h3>${t('Your open subjects')}</h3>
@@ -834,7 +817,7 @@
   // The name of the page a "back" link goes to.
   function backLabel(back) {
     const e = back.id && entryById(back.id), s0 = back.id && sub(back.id), x = back.id && itemById(back.id);
-    return { prep: t('Before you talk'), sujets: t('All subjects'), progress: t('Progress'), lookback: t('Look back'), report: t('How far you’ve come'), you: t('You'), semaines: t('Weeks'), precisions: t('Clarifications'),
+    return { prep: t('Before you talk'), sujets: t('All subjects'), progress: t('Progress'), lookback: t('Look back'), report: t('How far you’ve come'), you: t('You'), semaines: t('Weeks'), precisions: t('Permanent facts'),
       entry: e ? title(e) : t('Back'), sujet: s0 ? s0.titre : t('Back'), step: x ? x.text.slice(0, 50) : t('Progress'), month: back.key ? monthLabel(back.key) : t('Back'), search: t('Back') }[back.type] || t('Back');
   }
   // The page of one step forward: what it is, its line over time, then every event in order.
@@ -1120,82 +1103,175 @@
     }));
   }
 
-  // ---------- Clarifications ----------
-  // What you add to clear up a misunderstanding: "Sam is my neighbour", a misheard name…
-  // For the whole journal (every analysis and every summary) or for a single video.
-  const precisionOf = (p) => {
-    const e = p.entry && entryById(p.entry);
-    return { e, where: p.portee === 'journal' ? t('Whole journal') : e ? t('Video of {date} · {title}', { date: shortDay(e.date), title: title(e) }) : t('Removed video') };
+  // ---------- Clarifications, permanent facts, checks ----------
+  // A clarification corrects one video (its card and the subjects it fed, 1 call), then can become a permanent fact.
+  // Permanent facts go with every new analysis and summary; they never change what is already written.
+  let fixOffer = null; // { entry, text }: after a correction, "keep it as a permanent fact?"
+  const fixSummary = (n) => {
+    const parts = [n.fiche || n.idees ? t('the card') : null, n.sujets && tn(n.sujets, '{n} subject', '{n} subjects'), n.profile && tn(n.profile, '{n} fact about you', '{n} facts about you'),
+      n.progress && tn(n.progress, '{n} step forward', '{n} steps forward'), n.fusions && tn(n.fusions, '{n} merge of subjects', '{n} merges of subjects')].filter(Boolean);
+    return parts.length ? t('Video corrected: {list}.', { list: parts.join(', ') }) : t('Video read again: nothing to correct.');
   };
-  function precisionRow(p, withVideo) {
-    const { e, where } = precisionOf(p);
+  async function clarify(e, texte) {
+    busyMsg = t('Correcting this video');
+    render();
+    try {
+      const r = await window.api.journalClarify({ entry: e.id, texte });
+      S = r.state;
+      if (r.pending) showToast(e.analysis ? t('Clarification kept on the video. Gemini is not available right now: click “Correct this video” later.') : t('Clarification kept: it is used when this video is analysed.'));
+      else {
+        showToast(fixSummary(r.summary || {}));
+        const text = (r.summary && r.summary.fait) || texte;
+        if (text && !(S.faits || []).some((f) => f.text.toLowerCase() === String(text).toLowerCase())) fixOffer = { entry: e.id, text };
+      }
+    } catch (err) { showToast(cleanErr(err)); await update(); }
+    busyMsg = null;
+    render.lastKey = null;
+    render();
+  }
+  function precisionRow(p) {
     return `<li class="prec" data-prec="${p.id}">
       <div class="prec-text">${esc(p.texte)}</div>
-      <div class="prec-meta muted small">${withVideo && e ? `<span class="ref" data-id="${e.id}">${esc(where)}</span>` : esc(where)}${p.portee === 'journal' && e && withVideo ? ' · ' + esc(t('added from the video of {date}', { date: shortDay(e.date) })) : ''} · ${shortDay(p.at)} · ${p.appliquee ? t('applied to the journal') : `<span class="status wait">${t('not applied to the journal yet')}</span>`}
-        <button class="link-btn" data-prec-edit="${p.id}">${t('Edit')}</button><button class="link-btn danger-link" data-prec-del="${p.id}">${t('Delete')}</button></div>
+      <div class="prec-meta muted small">${shortDay(p.at)} · ${p.appliquee ? t('applied to this video') : `<span class="status wait">${t('not applied yet')}</span>`}
+        <button class="link-btn danger-link" data-prec-del="${p.id}">${t('Delete')}</button></div>
     </li>`;
   }
-  const precForm = (entry) => `<div class="prec-form">
-      <textarea id="precText" rows="2" placeholder="${esc(entry ? t('For example: Sam and “my neighbour” are the same person.') : t('For example: Sam is my neighbour. When I say “the club”, I mean my running club.'))}"></textarea>
-      ${entry ? `<div class="prec-scope">
-        <label class="check"><input type="radio" name="precScope" value="journal" checked> ${t('For the whole journal')} <span class="muted small">${t('(a person, a place, a nickname, a word: true everywhere)')}</span></label>
-        <label class="check"><input type="radio" name="precScope" value="video"> ${t('Only for this video')}</label></div>` : ''}
-      <button class="btn primary small-btn" id="btnPrecAdd">${t('Add the clarification')}</button>
-    </div>`;
   function bindPrecisionForm(entry) {
     const add = $('btnPrecAdd');
     if (add) add.onclick = async () => {
       const texte = $('precText').value.trim();
       if (!texte) { $('precText').focus(); return; }
-      const scope = document.querySelector('input[name=precScope]:checked');
-      S = await window.api.journalPrecision({ action: 'add', texte, portee: scope ? scope.value : 'journal', entry: entry ? entry.id : null });
-      render.lastKey = null;
-      render();
-      showToast(t('Clarification added. The next analyses take it into account; “Update the whole journal” applies it to what is already written.'));
+      if (entry) await clarify(entry, texte);
     };
+    const retry = $('btnPrecApply');
+    if (retry && entry) retry.onclick = () => clarify(entry, '');
     main().querySelectorAll('[data-prec-del]').forEach((b) => (b.onclick = async () => {
       if (!confirm(t('Delete this clarification? What was already corrected with it stays corrected.'))) return;
       S = await window.api.journalPrecision({ action: 'delete', id: b.dataset.precDel });
       render.lastKey = null; render();
     }));
-    main().querySelectorAll('[data-prec-edit]').forEach((b) => (b.onclick = () => {
-      const p = (S.precisions || []).find((x) => x.id === b.dataset.precEdit);
-      const li = b.closest('[data-prec]');
-      li.querySelector('.prec-text').innerHTML = `<textarea rows="2" class="prec-edit">${esc(p.texte)}</textarea><button class="btn primary small-btn">${t('Save')}</button>`;
-      const ta = li.querySelector('.prec-edit');
-      ta.focus();
-      li.querySelector('.prec-text .btn').onclick = async () => { S = await window.api.journalPrecision({ action: 'edit', id: p.id, texte: ta.value }); render.lastKey = null; render(); };
-    }));
+    const keep = $('btnFactKeep');
+    if (keep) keep.onclick = async () => {
+      const text = $('factOfferText').value.trim();
+      if (text) S = await window.api.journalFact({ action: 'add', text, entry: fixOffer && fixOffer.entry, source: 'clarification' });
+      fixOffer = null;
+      showToast(t('Kept as a permanent fact: it goes with every next analysis.'));
+      render.lastKey = null; render();
+    };
+    const no = $('btnFactNo');
+    if (no) no.onclick = () => { fixOffer = null; render.lastKey = null; render(); };
   }
-  // On the card of a video: the clarifications about it, and the form.
+  // On the page of a video: the clarification form, what waits, and what was applied.
   function precisionsCard(e) {
     const mine = (S.precisions || []).filter((p) => p.entry === e.id);
-    const global = (S.precisions || []).filter((p) => p.portee === 'journal' && p.entry !== e.id);
-    const pend = (S.precisions || []).filter((p) => !p.appliquee).length;
-    return `<div class="card prec-card"><h3>${t('Clarifications')}</h3>
-      <p class="muted small">${e.analysis ? t('Something was misunderstood? Add a clarification: who is who, a misheard name, the context. It is used by every next analysis and summary, and “Update the whole journal” applies it to what is already written.') : t('Something was misunderstood? Add a clarification: who is who, a misheard name, the context. It is used by every next analysis and summary.')}</p>
-      ${mine.length ? `<ul class="precs">${mine.map((p) => precisionRow(p, false)).join('')}</ul>` : ''}
-      ${precForm(e)}
-      ${pend ? `<div class="prec-actions"><button class="btn small-btn" data-apply-prec ${canCall() && !anyJob() ? '' : 'disabled'} title="${esc(t('Gemini reads the cards, subjects and summaries again (1 call)'))}">${t('Update the whole journal')}</button>
-        ${e.transcript ? `<button class="btn small-btn" data-act="reanalyse" ${canCall() ? '' : 'disabled'} title="${esc(t('Makes the card of this video again with the clarifications (1 call)'))}">${t('Analyse only this video again')}</button>` : ''}</div>` : ''}
-      ${global.length ? `<p class="muted small">${esc(t('Also used for this video: {list}', { list: global.map((p) => p.texte).join(' · ') }))}</p>` : ''}
+    const waiting = mine.filter((p) => !p.appliquee).length;
+    const offer = fixOffer && fixOffer.entry === e.id ? fixOffer : null;
+    const busy = !!(S.jobs[e.id] && S.jobs[e.id].step === 'Correcting this video');
+    return `<div class="card prec-card"><h3>${t('Clarification')}</h3>
+      <p class="muted small">${e.analysis ? t('Something was misunderstood in this video? Write it here: Carnet corrects the card of this video and the subjects it fed (1 call). The rest of the journal stays as it is.') : t('Something might be misunderstood? Write it here: it is used when this video is analysed.')}</p>
+      <div class="prec-form">
+        <textarea id="precText" rows="2" placeholder="${esc(t('For example: Sam is my neighbour, not my brother.'))}"></textarea>
+        <button class="btn primary small-btn" id="btnPrecAdd" ${busy || (e.analysis && !canCall()) ? 'disabled' : ''}>${busy ? t('Correcting…') : e.analysis ? t('Correct this video') : t('Add')}</button>
+      </div>
+      ${offer ? `<div class="fact-offer"><span>${t('Keep it as a permanent fact, for the next videos?')}</span>
+        <input type="text" id="factOfferText" value="${esc(offer.text)}"><button class="btn primary small-btn" id="btnFactKeep">${t('Keep')}</button><button class="btn small-btn" id="btnFactNo">${t('No')}</button></div>` : ''}
+      ${e.fixError ? `<p class="status err small">${esc(e.fixError)}</p>` : ''}
+      ${waiting && e.analysis ? `<div class="prec-actions"><span class="status wait">${esc(tn(waiting, '{n} clarification not applied yet', '{n} clarifications not applied yet'))}</span> <button class="btn small-btn" id="btnPrecApply" ${canCall() && !busy ? '' : 'disabled'} title="${esc(t('Uses 1 Gemini call'))}">${t('Correct this video')}</button></div>` : ''}
+      ${mine.length ? `<ul class="precs">${mine.map(precisionRow).join('')}</ul>` : ''}
+      ${(S.faits || []).length ? `<p class="muted small">${esc(tn(S.faits.length, '{n} permanent fact goes with every new analysis.', '{n} permanent facts go with every new analysis.'))} <button class="link-btn" data-nav-prec>${t('See them')}</button></p>` : ''}
     </div>`;
+  }
+  // A check: what the journal says, what the video says, and the person's answer.
+  function checkRow(c) {
+    const e = entryById(c.entry), b = c.beforeEntry && entryById(c.beforeEntry);
+    const where = (x) => (x ? t('video of {date} · {title}', { date: shortDay(x.date), title: title(x) }) : t('your journal'));
+    return `<li class="check-item" data-check="${c.id}">
+      <div class="ck-about"><b>${esc(c.about)}</b></div>
+      <div class="ck-row"><span class="ck-tag">${t('Your journal')}</span><span>${esc(i18n.quote(c.before))}</span> <span class="muted small">${b ? `<span class="ref" data-id="${b.id}">${esc(where(b))}</span>` : ''}</span></div>
+      <div class="ck-row"><span class="ck-tag new">${t('This video')}</span><span>${esc(i18n.quote(c.now))}</span> <span class="muted small">${e ? `<span class="ref" data-id="${e.id}">${esc(where(e))}</span>` : ''}</span></div>
+      ${c.corrected ? `<div class="muted small">${t('One of these videos was corrected since: check that this still applies.')}</div>` : ''}
+      <div class="ck-actions">
+        <button class="btn small-btn" data-ck="before" title="${esc(t('The video is corrected (1 call)'))}">${esc(t('Keep {text}', { text: i18n.quote(c.before) }))}</button>
+        <button class="btn small-btn" data-ck="now" title="${esc(t('The video the journal version came from is corrected (1 call)'))}">${esc(t('Take {text}', { text: i18n.quote(c.now) }))}</button>
+        <button class="btn small-btn" data-ck="both">${t('Both are true')}</button>
+        <label class="check small"><input type="checkbox" data-ck-keep checked> ${t('Keep the answer as a permanent fact')}</label>
+      </div>
+    </li>`;
+  }
+  function checksCard(list) {
+    if (!list.length) return '';
+    return `<div class="card checks-card"><h3>${t('To check')}</h3>
+      <p class="muted small">${t('A video says something different from your journal, without saying it changed. Your journal kept its version until you decide.')}</p>
+      <ul class="checks">${list.map(checkRow).join('')}</ul></div>`;
+  }
+  function bindChecks() {
+    main().querySelectorAll('[data-check]').forEach((li) => li.querySelectorAll('[data-ck]').forEach((b) => (b.onclick = async () => {
+      const keep = li.querySelector('[data-ck-keep]').checked;
+      busyMsg = t('Correcting this video');
+      render();
+      try {
+        const r = await window.api.journalCheck({ id: li.dataset.check, choice: b.dataset.ck, keep });
+        S = r.state;
+        if (r.pending) showToast(t('Answer saved. The video will be corrected from its page when Gemini is available.'));
+        else if (r.summary) showToast(fixSummary(r.summary));
+        else showToast(keep ? t('Answer saved, and kept as a permanent fact.') : t('Answer saved.'));
+      } catch (err) { showToast(cleanErr(err)); await update(); }
+      busyMsg = null;
+      render.lastKey = null;
+      render();
+    })));
+    main().querySelectorAll('.check-item .ref[data-id]').forEach((x) => (x.onclick = () => go({ type: 'entry', id: x.dataset.id })));
+  }
+  // Permanent facts: edit and delete.
+  function factRow(f) {
+    const e = f.entry && entryById(f.entry);
+    const from = { clarification: t('from a clarification'), check: t('from a check'), earlier: t('from an earlier clarification') }[f.source] || t('written by you');
+    return `<li class="prec" data-fact="${f.id}">
+      <div class="prec-text">${esc(f.text)}</div>
+      <div class="prec-meta muted small">${esc(from)}${e ? ` · <span class="ref" data-id="${e.id}">${esc(t('video of {date}', { date: shortDay(e.date) }))}</span>` : ''} · ${shortDay(f.at)}
+        <button class="link-btn" data-fact-edit="${f.id}">${t('Edit')}</button><button class="link-btn danger-link" data-fact-del="${f.id}">${t('Delete')}</button></div>
+    </li>`;
+  }
+  function bindFacts() {
+    const add = $('btnFactAdd');
+    if (add) add.onclick = async () => {
+      const text = $('factText').value.trim();
+      if (!text) { $('factText').focus(); return; }
+      S = await window.api.journalFact({ action: 'add', text });
+      render.lastKey = null; render();
+      showToast(t('Kept as a permanent fact: it goes with every next analysis.'));
+    };
+    main().querySelectorAll('[data-fact-del]').forEach((b) => (b.onclick = async () => {
+      if (!confirm(t('Delete this permanent fact? The next analyses will no longer get it; what is already written does not change.'))) return;
+      S = await window.api.journalFact({ action: 'delete', id: b.dataset.factDel });
+      render.lastKey = null; render();
+    }));
+    main().querySelectorAll('[data-fact-edit]').forEach((b) => (b.onclick = () => {
+      const f = (S.faits || []).find((x) => x.id === b.dataset.factEdit);
+      const li = b.closest('[data-fact]');
+      li.querySelector('.prec-text').innerHTML = `<textarea rows="2" class="prec-edit">${esc(f.text)}</textarea><button class="btn primary small-btn">${t('Save')}</button>`;
+      const ta = li.querySelector('.prec-edit');
+      ta.focus();
+      li.querySelector('.prec-text .btn').onclick = async () => { S = await window.api.journalFact({ action: 'edit', id: f.id, text: ta.value }); render.lastKey = null; render(); };
+    }));
+    main().querySelectorAll('[data-fact] .ref[data-id]').forEach((x) => (x.onclick = () => go({ type: 'entry', id: x.dataset.id })));
   }
   function renderPrecisions() {
-    const list = [...(S.precisions || [])].sort((a, b) => b.at - a.at);
-    const pend = list.filter((p) => !p.appliquee).length;
+    const facts = [...(S.faits || [])].sort((a, b) => b.at - a.at);
     main().innerHTML = `<div class="j-wrap">
-      <div class="j-head"><h1>${t('Clarifications')}</h1><span class="muted">${t('what you add so that Carnet understands correctly')}</span><div class="spacer"></div>
-        <button class="btn" data-apply-prec ${list.length && canCall() && !anyJob() ? '' : 'disabled'} title="${esc(t('Gemini reads the cards, subjects and summaries again and corrects what your clarifications change (1 call)'))}">${S.jobs.precisions ? t('Updating…') : t('Update the whole journal')}</button></div>
-      <p class="muted">${t('A “whole journal” clarification is sent with every analysis and every summary. A “video” clarification only when that video is concerned. <b>Update the whole journal</b> reads everything already written again (cards, subjects, summaries, weeks) and rewrites it where a clarification changes the meaning; two subjects that are actually the same are merged.')}${pend ? ` <span class="status wait">${tn(pend, '{n} clarification not applied yet', '{n} clarifications not applied yet')}</span>` : ''}</p>
-      ${S.precisionError ? `<p class="status err">${esc(S.precisionError)}</p>` : ''}
-      <div class="card"><h3>${t('Add a clarification for the whole journal')}</h3>${precForm(null)}<p class="muted small">${t('For a clarification about a single video, open the card of the video.')}</p></div>
-      <div class="card"><h3>${t('Your clarifications')}</h3>${list.length ? `<ul class="precs">${list.map((p) => precisionRow(p, true)).join('')}</ul>` : `<p class="muted">${t('No clarification yet.')}</p>`}</div>
+      <div class="j-head"><h1>${t('Permanent facts')}</h1><span class="muted">${t('what Carnet should always know')}</span></div>
+      <p class="muted">${t('They go with the analysis of each new video and with the summaries, so the same mistake is not made again: who someone is, a name the transcript gets wrong, what a word means for you. They never change what is already written: to correct a video, add a clarification on its page.')}</p>
+      ${checksCard(S.checks || [])}
+      <div class="card"><h3>${t('Add a permanent fact')}</h3>
+        <div class="prec-form"><textarea id="factText" rows="2" placeholder="${esc(t('For example: Sam is my neighbour. When I say “the club”, I mean my running club.'))}"></textarea>
+        <button class="btn primary small-btn" id="btnFactAdd">${t('Add')}</button></div></div>
+      <div class="card"><h3>${t('Your permanent facts')}</h3>${facts.length ? `<ul class="precs">${facts.map(factRow).join('')}</ul>` : `<p class="muted">${t('No permanent fact yet.')}</p>`}</div>
     </div>`;
     bind();
-    bindPrecisionForm(null);
-    bindPrecisionButtons();
+    bindFacts();
+    bindChecks();
   }
+
 
   // ---------- All subjects ----------
   // ---------- All subjects: a timeline ----------
@@ -1517,9 +1593,10 @@
       ${e.transcriptError ? `<div class="card"><h3>${t('Transcription')}</h3><p class="status err">${esc(e.transcriptError)}</p></div>` : ''}
       ${e.analysisError ? `<div class="card"><h3>${t('Analysis')}</h3><p class="status err">${esc(e.analysisError)}</p></div>` : ''}
       ${precisionsCard(e)}
+      ${checksCard((S.checks || []).filter((c) => c.entry === e.id || c.beforeEntry === e.id))}
       ${lb ? `<div class="card"><h3>${t('Look-back: the questions')}</h3><ol class="lb-q">${lb.questions.map((q) => `<li>${esc(q.text)}</li>`).join('')}</ol></div>` : ''}
       ${a ? `<div class="card"><h3>${t('Video summary')}</h3>${a.resume ? `<p>${said(a.resume, [e])}</p>` : `<p class="muted">${t('No speech in this video.')}</p>`}
-        ${a.citation ? `<blockquote class="quote">${esc(i18n.quote(a.citation))}</blockquote>` : ''}</div>
+        ${a.citation ? `<blockquote class="quote">${esc(i18n.quote(a.citation))}</blockquote>` : ''}${contextLine(e)}</div>
       ${progressCard}
       ${(a.evolutions || []).filter((x) => sub(x.sujet)).length ? `<div class="card"><h3>${t('Compared with before')}</h3>${a.evolutions.filter((x) => sub(x.sujet)).map((x) => `<div class="cat-group"><div class="cat-head">${subChip(sub(x.sujet))}</div><p>${said(x.texte, [e])}</p></div>`).join('')}</div>` : ''}
       ${ideaGroups.length ? `<div class="card"><h3>${t('Ideas, by subject')}</h3>${ideaGroups.map((g) => `<div class="cat-group"><div class="cat-head">${g.key ? subChip(sub(g.key)) : `<span class="muted small">${t('No subject')}</span>`}</div><ul class="ideas">${g.list.map((i) => `<li>${said(i.texte, [e])}${ts(i.t)}</li>`).join('')}</ul></div>`).join('')}</div>` : ''}
@@ -1539,6 +1616,8 @@
     main().querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => entryAction(e, b.dataset.act)));
     bindPrecisionForm(e);
     bindPrecisionButtons();
+    bindChecks();
+    main().querySelectorAll('.ctx-line .ref[data-id]').forEach((x) => (x.onclick = () => go({ type: 'entry', id: x.dataset.id })));
     bindProgress();
     // Opened from a link to a moment: the video starts there.
     if (view.t !== null && view.t !== undefined && $('entryVideo')) {
@@ -1548,6 +1627,22 @@
       if (v.readyState >= 1) start(); else v.addEventListener('loadedmetadata', start, { once: true });
       v.scrollIntoView({ block: 'start' });
     }
+  }
+
+  // What the analysis of a video had of the journal: everything, the most recent, or search memory.
+  function contextLine(e) {
+    const c = e.analysis && e.analysis.context;
+    if (!c) return '';
+    if (c.mode === 'all') return `<p class="muted small ctx-line">${t('Analysed with all your journal: every subject, what Carnet knows about you and your steps forward.')}</p>`;
+    if (c.mode === 'recent') return `<p class="muted small ctx-line">${esc(t('Analysed with your {n} most recently discussed subjects out of {total}: search memory was not ready yet.', { n: c.shown, total: c.total }))}</p>`;
+    const found = (c.found || []).map(sub).filter(Boolean);
+    const vids = (c.videos || []).map(entryById).filter(Boolean);
+    const rest = Math.max(0, (c.total || 0) - (c.full || []).length);
+    const parts = [tn(c.recent || 0, '{n} recent subject', '{n} recent subjects'), tn(found.length, '{n} older subject found by search', '{n} older subjects found by search'),
+      rest ? tn(rest, 'the title of {n} other subject', 'the titles of {n} other subjects') : null, vids.length ? tn(vids.length, '{n} older video', '{n} older videos') : null].filter(Boolean);
+    return `<details class="ctx-line muted small"><summary>${esc(t('Analysed with search memory: {list}.', { list: parts.join(', ') }))}</summary>
+      ${found.length ? `<div>${t('Older subjects found:')} ${found.map((x) => `<span class="sub-link" data-sub="${x.id}">${esc(x.titre)}</span>`).join(', ')}</div>` : ''}
+      ${vids.length ? `<div>${t('Older videos found:')} ${vids.map((v) => `<span class="ref" data-id="${v.id}">${esc(shortDay(v.date) + ' · ' + title(v))}</span>`).join(', ')}</div>` : ''}</details>`;
   }
 
   function sectionsOf(e) {
@@ -1568,7 +1663,7 @@
     if (act === 'edit') { openFile(file); return; }
     if (act === 'show') { window.api.showInFolder(file); return; }
     if (act === 'remove' && !confirm(t('Remove this video from the journal? The file stays in the folder.'))) return;
-    if (act === 'retranscribe' && !confirm(S.transcriber === 'gemini' ? t('Redo the transcript and the card with Gemini? (1 call)') : t('Redo the transcript? The analysis will be redone too (1 Gemini call).'))) return;
+    if (act === 'retranscribe' && !confirm(S.transcriber === 'gemini' ? (S.memory && S.memory.over && S.memory.items ? t('Redo the transcript and the card with Gemini? (2 calls: with search memory, the transcript comes first)') : t('Redo the transcript and the card with Gemini? (1 call)')) : t('Redo the transcript? The analysis will be redone too (1 Gemini call).'))) return;
     S = await window.api.journalEntry(e.id, act);
     if (act === 'remove') view = { type: 'month', key: monthKey(e.date) };
     render();
@@ -1737,10 +1832,26 @@
     $('setAutoSemaine').checked = g.autoSemaine;
     const u = g.usage;
     $('setUsage').textContent = g.hasKey
-      ? t('Today: {count} of {budget} calls{blocked}. One video = 1 call (transcription included), a summary (of a period or a week) = 1 call, reorganising the subjects = 1 call, updating strengths and weaknesses = 1 call, the look-back questions, “How far you’ve come” and looking through earlier videos = 1 call each. The counter resets at {time} (midnight in California).', {
+      ? t('Today: {count} of {budget} calls{blocked}. One video = 1 call (transcription included; 2 when search memory is in use and Gemini transcribes), correcting a video with a clarification = 1 call, a summary (of a period or a week) = 1 call, reorganising the subjects = 1 call, updating strengths and weaknesses = 1 call, the look-back questions, “How far you’ve come” and looking through earlier videos = 1 call each. The counter resets at {time} (midnight in California).', {
         count: u.count, budget: u.budget, blocked: u.blocked ? ' · ' + t('Google reported the quota as reached') : '', time: clock(g.resetAt),
       })
       : '';
+    // Search memory and permanent facts.
+    const m = S.memory;
+    const upd = (ts) => (ts ? t('updated on {date}', { date: shortDay(ts) }) : '');
+    $('setMemory').textContent = !m ? t('Choose a journal folder first.')
+      : !g.hasKey ? t('Needs a Gemini key.')
+        : m.building ? t('Indexing your journal: {done} of {total}…', { done: m.building.done, total: m.building.total })
+          : m.error ? (m.waitUntil ? t('Paused by Gemini ({error}). Tries again at {time}.', { error: m.error.slice(0, 160), time: clock(m.waitUntil) }) : t('Could not build it: {error}', { error: m.error.slice(0, 200) }))
+            : m.items && m.over ? t('In use: your journal is at {pct}% of what one request can hold. {items}, {updated}.', { pct: m.pct, items: tn(m.items, '{n} item indexed', '{n} items indexed'), updated: upd(m.updated) })
+              : m.items ? t('Ready: {items}, {updated}. Used when your journal goes over what one request can hold (now {pct}%).', { pct: m.pct, items: tn(m.items, '{n} item indexed', '{n} items indexed'), updated: upd(m.updated) })
+                : m.wanted ? t('Being prepared: your journal is at {pct}% of what one request can hold.', { pct: m.pct })
+                  : t('Not needed yet: your journal is at {pct}% of what one request can hold. It is built on its own from 60%.', { pct: m.pct });
+    $('btnMemBuild').textContent = m && m.items ? t('Build again') : t('Build now');
+    $('btnMemBuild').disabled = !m || !g.hasKey || !!m.building;
+    const nf = (S.faits || []).length;
+    $('setFactsLine').innerHTML = `${esc(nf ? tn(nf, '{n} permanent fact goes with every new analysis.', '{n} permanent facts go with every new analysis.') : t('No permanent fact yet.'))} <button class="link-btn" id="btnSetFacts">${t('See them')}</button>`;
+    $('btnSetFacts').onclick = () => { $('settingsModal').classList.add('hidden'); go({ type: 'precisions' }); };
     // Recording: the same choices as under the picture of the recording window (kept in this window's storage).
     $('setQuality').value = typeof recLight === 'function' && recLight() ? 'light' : 'full';
     $('setRecBy').value = typeof recBy === 'function' ? recBy() : 'phone';
@@ -1783,6 +1894,11 @@
   $('btnSetTier').onclick = async () => {
     $('btnSetTier').disabled = true;
     try { S = await window.api.journalCheckTier(); } catch (err) { showToast(cleanErr(err)); }
+    renderSettings();
+  };
+  $('btnMemBuild').onclick = async () => {
+    $('btnMemBuild').disabled = true;
+    try { S = await window.api.memoryBuild({ again: !!(S.memory && S.memory.items) }); } catch (err) { showToast(cleanErr(err)); }
     renderSettings();
   };
   $('setModel').onchange = async () => { S = await window.api.journalSettings({ model: $('setModel').value }); render(); };
@@ -1844,7 +1960,8 @@
       const old = before.entries.find((x) => x.id === e.id);
       if (old && !old.analysis && e.analysis) {
         const n = e.analysis.profileChanges || 0, pa = e.analysis.progressAdded || 0, pl = e.analysis.progressLinks || 0;
-        const extra = [n && tn(n, '{n} change about you', '{n} changes about you'), pa && tn(pa, '{n} step forward', '{n} steps forward'), pl && tn(pl, 'linked to {n} earlier step', 'linked to {n} earlier steps')].filter(Boolean);
+        const ck = (s.checks || []).filter((c) => c.entry === e.id).length;
+        const extra = [n && tn(n, '{n} change about you', '{n} changes about you'), pa && tn(pa, '{n} step forward', '{n} steps forward'), pl && tn(pl, 'linked to {n} earlier step', 'linked to {n} earlier steps'), ck && tn(ck, '{n} thing to check', '{n} things to check')].filter(Boolean);
         showToast([t('Video analysed: {title}', { title: title(e) }), ...extra].join(' · '));
       }
     }

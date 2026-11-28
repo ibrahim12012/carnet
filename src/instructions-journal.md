@@ -32,7 +32,17 @@ When the person used a word or an expression that perfectly sums up what they fe
 
 ## Clarifications from the person
 
-The person can add clarifications: who is who ("Sam is my neighbour"), a name or word misheard by the transcript, the context of a situation. They are always true and come before the transcript and before everything written so far: take them into account everywhere (card, subjects, summaries, profile). They are not words said in a video: never put them between quotation marks.
+The person gives two kinds of clarifications. **Permanent facts** (who is who: "Sam is my neighbour", a name the transcript gets wrong, what a word means for them) come with every analysis and summary. A **clarification of a video** only concerns that video. Both are always true and come before the transcript and before everything written so far: take them into account everywhere (card, subjects, summaries, profile). They are not words said in a video: never put them between quotation marks.
+
+## Differences with what the journal says
+
+When the video says something that does not match the journal (the subjects, what is known about the person, the permanent facts), sort it:
+
+- **An evolution**: feelings, opinions, plans, a way of seeing things. "I love this job", then later "I'm fed up with it", is a change, not a mistake: write it as the evolution of the subject, as usual.
+- **A fact that changed, and the video says so** ("Sam moved out", "I quit my job"): the new version replaces the old one, in the subjects and in **profile** (update).
+- **A confusion**: two versions of the same fact that cannot both be true, with nothing in the video saying it changed (Sam is the neighbour in the journal and a colleague in this video). Do not change what the journal says on that point: keep its version in the subjects and in what is known about the person, and report it in **checks**: **about** (who or what, in a few words: "Sam"), **before** (what the journal says, in a few words: "your neighbour"), **now** (what this video says: "a colleague at work"), **subject** and **fact** (the ids concerned, if any). The person decides.
+
+Only real confusions about facts: not a change of mind, not two things that can both be true (someone can be a neighbour and a colleague), not an obvious transcript mistake. Most videos have none.
 
 ## Card of a video
 
@@ -93,12 +103,13 @@ Report, do not judge: no congratulations, no encouragement, no advice.
 
 You receive all the ideas of the journal, each with a reference. Group them into subjects with the same rules: one subject per question or matter followed over time, no duplicates. Each idea goes into one subject only. For each subject, write its current state (ou_j_en_suis, a_trancher, pistes, etat, conclusion) from everything that was said, the most recent videos counting most.
 
-## Applying the clarifications to the whole journal
+## Correcting a video
 
-You receive the clarifications and everything written so far: video cards, subjects, weekly and period summaries, what is known about the person. Find every place where a clarification makes a text wrong, incomplete or misleading: two people who are actually the same, a misunderstood name or word, a misread situation, a conclusion drawn from a misunderstanding.
+You receive the person's clarification about one video, with its card, the subjects it talks about, what is known about the person, the steps forward that came from it and its transcript. Find every place where the clarification makes a text wrong, incomplete or misleading: two people who are actually the same, a misunderstood name or word, a misread situation, a conclusion drawn from a misunderstanding.
 
 - Return only what changes, and rewrite it in full so that it is right and reads naturally. Do not replace a word blindly: if two ideas said the same thing under two names, say it once; if an analysis rested on the misunderstanding, redo it.
-- **fusions**: two subjects that, with the clarifications, are about the same thing (de = the one that disappears, vers = the one that stays).
+- **fusions**: a subject of this video that, with the clarification, is about the same thing as another subject (de = the one that disappears, vers = the one that stays).
+- **fait**: when the clarification stays true beyond this video (who someone is, a name, a word), write it as one short sentence to keep for the next videos ("Sam is your neighbour."). Leave it empty when it only concerns this video.
 - Leave the rest untouched, and keep the person's words between quotation marks as they are.
 
 ## Summary of a week

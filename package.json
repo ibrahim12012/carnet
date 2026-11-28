@@ -1,7 +1,7 @@
 {
   "name": "carnet",
   "productName": "Carnet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Video journal that works as a second brain: talk to the camera, Carnet transcribes, follows your subjects from one video to the next and keeps what you say about yourself.",
   "main": "src/main.js",
   "scripts": {
@@ -40,7 +40,14 @@
       "icon": "build/icon.ico",
       "fileAssociations": [
         {
-          "ext": ["mp4", "mov", "mkv", "webm", "avi", "m4v"],
+          "ext": [
+            "mp4",
+            "mov",
+            "mkv",
+            "webm",
+            "avi",
+            "m4v"
+          ],
           "name": "Video",
           "description": "Video",
           "role": "Editor",
@@ -65,7 +72,10 @@
       "identity": null,
       "hardenedRuntime": false,
       "extraResources": [
-        { "from": "build/mac-whisper", "to": "whisper" }
+        {
+          "from": "build/mac-whisper",
+          "to": "whisper"
+        }
       ],
       "extendInfo": {
         "NSCameraUsageDescription": "Carnet films the entries of your video journal.",
@@ -74,7 +84,14 @@
       },
       "fileAssociations": [
         {
-          "ext": ["mp4", "mov", "mkv", "webm", "avi", "m4v"],
+          "ext": [
+            "mp4",
+            "mov",
+            "mkv",
+            "webm",
+            "avi",
+            "m4v"
+          ],
           "name": "Video",
           "description": "Video",
           "role": "Editor"
@@ -88,7 +105,10 @@
     "protocols": [
       {
         "name": "Carnet",
-        "schemes": ["carnet", "raccord"]
+        "schemes": [
+          "carnet",
+          "raccord"
+        ]
       }
     ]
   },

@@ -467,6 +467,29 @@ textarea:focus { border-color: var(--accent); }
 .prec-scope { display: flex; flex-direction: column; gap: 2px; }
 .prec-actions { display: flex; gap: 8px; margin-top: 10px; }
 .prec-card { border-left: 3px solid var(--chapter); }
+.prec-form textarea { width: 100%; }
+/* After a correction: keep the clarification as a permanent fact? */
+.fact-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; }
+.fact-offer > span { flex: 1 1 100%; }
+.fact-offer input[type=text] { flex: 1 1 260px; min-width: 0; }
+/* To check: what the journal says and what a video says */
+.checks-card { border-left: 3px solid var(--chapter); }
+.checks { list-style: none; margin: 0; padding: 0; }
+.check-item { padding: 10px 0; border-top: 1px solid var(--border); }
+.check-item:first-child { border-top: 0; }
+.ck-about { color: #fff; margin-bottom: 4px; }
+.ck-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 2px 0; }
+.ck-tag { flex: 0 0 auto; min-width: 112px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ck-tag.new { color: var(--chapter); }
+.ck-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 8px; }
+.ck-actions .btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-actions .check { margin-left: auto; }
+.check-item .ref { cursor: pointer; text-decoration: underline dotted; }
+/* What the analysis of a video had of the journal */
+.ctx-line { margin: 10px 0 0; }
+details.ctx-line summary { cursor: pointer; }
+details.ctx-line > div { margin-top: 4px; }
+details.ctx-line .ref { cursor: pointer; text-decoration: underline dotted; }
 .pp-help { margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--chapter); background: var(--panel); border-radius: 0 var(--radius) var(--radius) 0; font-size: 13px; }
 .pp-help ul { margin: 4px 0 0; padding-left: 18px; }
 .pp-help li { margin-bottom: 4px; }

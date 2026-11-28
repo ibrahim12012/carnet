@@ -93,14 +93,18 @@ A subject discussed in at least 3 videos that has not come up for 4 weeks, while
 
 **Daily reminder** (Settings > Reminder, off by default): once a day at the chosen time, a notification with what there is to check, a look-back, or a subject that stopped coming up; when there is nothing to check, where you stood a month ago on a subject. A click opens Carnet on Before you talk. If the computer is asleep at that time, it shows when it wakes up, up to 6 hours later. While the reminder is on, Carnet starts with Windows without opening its window and stays in the notification area when you close the window (right-click its icon to quit). On a Mac, it opens at login without its window, with an icon in the menu bar (click it to open or quit Carnet); macOS asks once whether Carnet may send notifications. **Try it** shows the notification of today right away.
 
-### Clarifications
+### Clarifications and permanent facts
 
-When something was misunderstood (two names for the same person, a misheard word, a misread situation), add a **clarification**:
-- on the card of a video, **Clarifications** card, or in **Clarifications** (left menu);
-- **For the whole journal** (for example "Sam is my neighbour"): sent with every analysis, reorganisation and summary;
-- **Only for this video**: sent only when that video is analysed or part of a summary.
+**Clarification of a video**: when something was misunderstood in a video (two names for the same person, a misheard word, a misread situation), write it in the **Clarification** card of that video, then **Correct this video** (1 call). Gemini receives only that video: its card, the subjects it fed, what Carnet knows about you, the steps forward that came from it and its transcript. It rewrites what the clarification changes (not a simple word replacement) and can merge a subject of this video with another one that turns out to be the same. The rest of the journal is not sent and does not change. The clarification stays with the video and is used again only if that video is analysed again. The previous "where you're at" stays in the history of the subject ("corrected with your clarifications"). Transcripts do not change: they stay word for word what was said.
 
-The next analyses take it into account right away. For what is already written, **Update the whole journal** (1 call): Gemini reads the cards, subjects, summaries, weeks and what it knows about you again, and rewrites each passage the clarifications change (not a simple word replacement); two subjects that turn out to be the same are merged. The previous version of "where you're at" stays in the history of the subject ("corrected with your clarifications"). **Analyse only this video again** redoes the card of one video with the clarifications. Transcripts do not change: they stay word for word what was said.
+**Permanent facts** (left menu): what Carnet should always know, for example "Sam is my neighbour" or "when I say the club, I mean my running club". They go with the analysis of each new video and with the summaries, a few words each, and never change what is already written. After a correction, Carnet offers to keep the clarification as a permanent fact (Gemini suggests a short sentence; you can edit it). Clarifications "for the whole journal" of earlier versions became permanent facts.
+
+**To check**: when a video says something that does not fit the journal, the analysis sorts it:
+- a change of feelings, opinion or plans is an evolution of the subject, as usual;
+- a fact the video says has changed ("Sam moved out") replaces the old one;
+- two versions of the same fact with nothing said about a change (Sam is your neighbour, then a colleague) is a confusion: the journal keeps its version, and the difference goes to **To check**, on the Permanent facts page, on the video page and as a notice in Before you talk.
+
+For each one: **Keep** the journal version (the new video is corrected, 1 call), **Take** the new one (the video the journal version came from is corrected, 1 call), or **Both are true** (nothing changes). The answer can also become a permanent fact (ticked by default).
 
 ### Recording with your notes
 
@@ -117,13 +121,14 @@ The chosen subject gives its title to the video and is sent to Gemini with it, s
 
 - **Word-for-word transcript**: with Gemini, everything you say is written as is, hesitations, repetitions, slang and unfinished sentences included; only punctuation is added. With whisper, the text is whisper's, which tends to drop hesitations.
 - **Your own words in the summaries**: when you used a word that sums up exactly how you feel ("drained", "going round in circles"), Gemini reuses it as is in the summary, the "where you're at" or the period summary, between the quotation marks of your language. Only if such a word exists: it does not invent one. In Carnet these words are in yellow italics; when they are found in a transcript, a click opens the video at the moment you say them.
-- For each video, 1 call: transcript, card, the subjects discussed (where you're at, to decide, leads, concluded or not), what the video says about you, and its steps forward with the links to earlier ones. Gemini receives your subjects with their state (and the previous "where you're at", to notice when you change your mind), to pick up existing threads instead of creating new ones. Videos are analysed from the oldest to the newest.
+- For each video, 1 call: transcript, card, the subjects discussed (where you're at, to decide, leads, concluded or not), what the video says about you, its steps forward with the links to earlier ones, and what does not fit the journal (To check). Gemini receives your subjects with their state (and the previous "where you're at", to notice when you change your mind), to pick up existing threads instead of creating new ones, plus your permanent facts. Videos are analysed from the oldest to the newest.
+- **Search memory**: when your journal no longer fits in one request (about 24,000 tokens of subjects, steps forward and what Carnet knows about you), each video gets your most recent subjects in full, the older ones close to what it says (found by meaning with vectors, and by the names in their titles) in full too, the titles of all the others, and up to 5 older videos close to it. The vectors are made by Gemini's embedding model (`gemini-embedding-001`, a separate quota: the day's calls do not change), in the background once the journal reaches 60 % of the limit, then for each new or changed item; they are kept in `search-memory.json`. With transcription by Gemini, a video then takes 2 calls: the transcript first, so that the search can read it, then the card. Until the vectors are ready, or if the search fails, Carnet sends the 80 most recent open subjects and 40 concluded ones, as before. Each video says how it was analysed ("Analysed with all your journal", or with search memory, with the list of what was found), and **Settings** shows the state of search memory, with **Build now** or **Build again**.
 - Summary: 1 call, with **Make the summary**, or automatically at most once a day when there are new videos (can be turned off).
 - A journal made with an earlier version of Carnet is organised into subjects automatically on first launch (1 call).
 
 ### Gemini: free key, quota and overloads
 
-One video = 1 call (transcription included), a summary (of a period or a week) = 1 call, reorganising the subjects = 1 call, **Update** on the You page = 1 call, the look-back questions, **How far you’ve come** and **Look through my earlier videos** = 1 call each. The number of calls per day is set in **Settings** (20 by default) and resets at midnight California time (9:00 in Paris). When it is reached, videos wait for the reset. The automatic summary always keeps 3 calls in reserve.
+One video = 1 call (transcription included; 2 with search memory and transcription by Gemini), correcting a video with a clarification = 1 call, a summary (of a period or a week) = 1 call, reorganising the subjects = 1 call, **Update** on the You page = 1 call, the look-back questions, **How far you’ve come** and **Look through my earlier videos** = 1 call each. The number of calls per day is set in **Settings** (20 by default) and resets at midnight California time (9:00 in Paris). When it is reached, videos wait for the reset. The automatic summary always keeps 3 calls in reserve.
 
 **Free or paid key**: when you save the key, Carnet sends one tiny request to a model that the free tier does not offer: a free key gets "limit: 0" back (nothing is charged), a paid key a one-word answer. Gemini errors that mention the free tier also mark the key as free. **Settings** shows the result, with a **Check** button.
 
@@ -135,6 +140,7 @@ One video = 1 call (transcription included), a summary (of a period or a week) =
 - `Journal videos/`: the videos, named `DD-MM-YY HHhMM Title.mp4` (for example `27-10-26 08h41 Weekly review.mp4`). Journals started with an earlier version keep their `Vidéos du journal/` folder. When added, a video takes the title of the edit; after the analysis, it is renamed with the title Gemini found. If the video is playing, the renaming happens as soon as it is free.
 - `Transcripts/`: the full text of each video.
 - `Journal instructions.md`: what Gemini must do (tone, card, subjects, about you, strengths and weaknesses, progress, look-back, how far you’ve come, reorganisation, summaries). When Carnet adds new sections and you edited the file, they are added at the end of your version. You can edit it; **Analyse again** applies new instructions to a video. If you never edited it, it is updated automatically with new versions of Carnet.
+- `search-memory.json`: the vectors of search memory (an index only: the text stays in `journal.json`). If it is deleted or damaged, Carnet makes it again.
 - `journal.json`: the app's data. At every save, the previous version is kept in `journal.json.bak`, and one copy a day goes to `Backups/` (the last 14 days).
   - If `journal.json` is damaged (power cut during a write, incomplete sync), Carnet puts it aside (`journal.json.damaged-…`) and starts again from the last healthy copy, with a message.
   - If no copy can be read, Carnet writes nothing more to the journal and says so, instead of starting from an empty journal.
@@ -261,8 +267,9 @@ The date on the clips and the progress reel need the drawtext filter of FFmpeg. 
 - `src/render.js`: FFmpeg commands (analysis, conversion, assembly, progress reel)
 - `src/preload.js`: bridge between the interface and the system
 - `src/whisper.js`: installing and running whisper.cpp (downloaded on Windows, included or from Homebrew on a Mac)
-- `src/gemini.js`: requests to Gemini, error types, free or paid key, daily call counter
-- `src/journal.js`: journal data (videos, subjects, summaries, profile, progress, look-backs), requests sent to Gemini, Markdown files
+- `src/gemini.js`: requests to Gemini, embeddings for search memory, error types, free or paid key, daily call counter
+- `src/journal.js`: journal data (videos, subjects, summaries, profile, progress, look-backs, clarifications, permanent facts, checks), requests sent to Gemini (and what they contain when search memory is used), Markdown files
+- `src/memory.js`: search memory (vectors kept in `search-memory.json`, what changed, similarity)
 - `src/instructions-journal.md`: default instructions, copied into the journal folder
 - `src/i18n/`: languages (`index.js` and one dictionary per language)
 - `src/renderer/journal-ui.js`: journal screen (before you talk, you, progress, look back, how far you’ve come, weeks, subjects, videos) and the notes of the recording

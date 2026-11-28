@@ -6,6 +6,7 @@ const { pathToFileURL } = require('url');
 const render = require('./render');
 const whisper = require('./whisper');
 const journal = require('./journal');
+const memory = require('./memory');
 const i18n = require('./i18n');
 const { t, tn } = i18n;
 
@@ -904,7 +905,7 @@ function setKey(key) {
   saveSettings({ geminiKey: enc ? safeStorage.encryptString(key).toString('base64') : key, geminiKeyEnc: enc });
 }
 
-const emptyJournal = () => ({ version: 3, entries: [], sujets: [], bilans: [], semaines: {}, precisions: [], profile: journal.normalizeProfile(null), progress: journal.normalizeProgress(null), rebuild: false });
+const emptyJournal = () => ({ version: 3, entries: [], sujets: [], bilans: [], semaines: {}, precisions: [], faits: [], checks: [], profile: journal.normalizeProfile(null), progress: journal.normalizeProgress(null), rebuild: false });
 let data = emptyJournal();
 const jobs = {}; // id -> { step, pct } : travail en cours, pour l'affichage
 function loadJournal() {
@@ -917,7 +918,9 @@ function loadJournal() {
 // Erreur d'écriture du journal (affichée dans l'app). Le journal en mémoire n'est jamais écrit
 // par-dessus un fichier qu'on n'a pas pu lire.
 let saveError = null;
+let dataVersion = 0; // counts the changes, for what is computed from the whole journal (search memory status)
 function persist() {
+  dataVersion++;
   // Concluded subjects become steps forward (and reopened ones are put aside) before each save.
   if (!data.broken) { try { journal.syncSettled(data); } catch (_) {} }
   if (journalDir()) {
@@ -1001,6 +1004,9 @@ function state() {
     bilans: data.bilans.slice(-10),
     semaines: data.semaines || {},
     precisions: data.precisions || [],
+    faits: journal.factsOf(data),
+    checks: journal.checksOf(data),
+    memory: memoryStatus(),
     profile: journal.profileOf(data),
     profileJob: profileJob,
     profileError: data.profileError || null,
@@ -1012,7 +1018,6 @@ function state() {
     progressJob,
     reminder: reminder(),
     lang: i18n.lang,
-    precisionError: data.precisionError || null,
     weekError: data.weekError || null,
     rebuild: data.rebuild,
     rebuildError: data.rebuildError || null,
@@ -1183,8 +1188,95 @@ async function callGemini(system, prompt, schema, audio, temperature) {
 // Failures that resolve on their own: the video is not marked as failed, it is analysed when Gemini answers again.
 const waitable = (err) => !!err && (err.transient || err.kind === 'daily' || err.kind === 'quota');
 
+// ---------- Search memory ----------
+// When what an analysis would send about the journal goes over journal.MEMORY_BUDGET, the search picks the subjects
+// to send in full (memory.js, journal.searchPlan). Vectors are made in the background from 60 % of the limit (or at
+// once with "Build now"), with Gemini's embedding model: its quota is separate, the day's calls do not change.
+let mem = null; // { dir, idx }
+let memBusy = false, memError = null, memWaitUntil = 0, memDone = 0, memTodo = 0;
+function memIndex() {
+  if (!journalDir()) return null;
+  if (!mem || mem.dir !== journalDir()) mem = { dir: journalDir(), idx: memory.load(journalDir(), gemini.EMBED_MODEL) };
+  return mem.idx;
+}
+// Size of the journal context of the next analysis, compared with the limit (computed again after each change).
+let memUse = { version: -1, tokens: 0 };
+function memoryUse() {
+  if (memUse.version !== dataVersion) {
+    const probe = { id: '', date: Date.now(), title: '', chapters: [] };
+    memUse = { version: dataVersion, tokens: journal.contextTokens(data, probe, 'all') };
+  }
+  return memUse.tokens;
+}
+const memoryWanted = () => settings.searchMemory === 'on' || memoryUse() >= 0.6 * journal.MEMORY_BUDGET;
+function memoryReady() {
+  const idx = memIndex();
+  return !!idx && Object.keys(idx.items).length > 0 && memory.coverage(idx, journal.memoryTexts(data)) >= 0.8;
+}
+async function memorySync() {
+  if (memBusy || !journalDir() || data.broken || !getKey() || Date.now() < memWaitUntil || !memoryWanted()) return;
+  const idx = memIndex();
+  const { todo, gone } = memory.diff(idx, journal.memoryTexts(data));
+  if (gone.length) memory.drop(idx, gone);
+  if (!todo.length) { if (gone.length) { try { memory.save(mem.dir, idx); } catch (_) {} } return; }
+  memBusy = true; memDone = 0; memTodo = todo.length;
+  pushState();
+  try {
+    for (let i = 0; i < todo.length; i += 100) {
+      const batch = todo.slice(i, i + 100);
+      const vecs = await gemini.embed(fetchFn, { key: getKey(), texts: batch.map((x) => x.text), task: 'RETRIEVAL_DOCUMENT' });
+      batch.forEach((x, k) => memory.put(idx, x.key, x.h, vecs[k]));
+      idx.model = gemini.EMBED_MODEL;
+      idx.updated = Date.now();
+      memory.save(mem.dir, idx);
+      memDone += batch.length;
+      pushState();
+    }
+    memError = null;
+  } catch (err) {
+    memError = String(err.message || err).slice(0, 300);
+    // Per-minute limit or overload: again a little later; daily quota: after the reset; anything else: in an hour.
+    memWaitUntil = Date.now() + (err.kind === 'daily' ? gemini.nextQuotaReset() - Date.now() + 60e3 : err.transient ? Math.max(60e3, err.retryMs || 0) : 60 * 60e3);
+  } finally {
+    memBusy = false;
+    pushState();
+    setTimeout(() => memorySync().catch(() => {}), 2000);
+  }
+}
+function memoryStatus() {
+  if (!journalDir()) return null;
+  const idx = mem && mem.dir === journalDir() ? mem.idx : memIndex();
+  const tokens = memoryUse();
+  return {
+    pct: Math.round((tokens / journal.MEMORY_BUDGET) * 100),
+    over: tokens > journal.MEMORY_BUDGET,
+    items: idx ? Object.keys(idx.items).length : 0,
+    updated: idx ? idx.updated : 0,
+    building: memBusy ? { done: memDone, total: memTodo } : null,
+    wanted: memoryWanted(),
+    error: memError,
+    waitUntil: memWaitUntil > Date.now() ? memWaitUntil : 0,
+  };
+}
+// What to send about the journal for this video: everything when it fits, otherwise the search (the video must be
+// transcribed), otherwise the most recent.
+async function contextFor(e, fallback) {
+  if (!e.transcript || !e.transcript.segments.length) return fallback;
+  const chunks = journal.queryChunks(e);
+  if (!chunks.length) return fallback;
+  jobs[e.id] = { step: 'Searching your memory', pct: 0 };
+  pushState();
+  try {
+    const queries = await gemini.embed(fetchFn, { key: getKey(), texts: chunks, task: 'RETRIEVAL_QUERY' });
+    return journal.searchPlan(data, e, { scores: memory.scores(memIndex(), queries) });
+  } catch (err) {
+    memError = String(err.message || err).slice(0, 300);
+    return fallback;
+  }
+}
+
 async function analyseNext() {
-  if (analysing || !journalDir() || !getKey()) return;
+  if (analysing || fixQueued || !journalDir() || !getKey()) return;
   if (gemini.usage(settings).left <= 0 || geminiPaused()) return;
   // Ancien journal : les sujets sont construits une fois, avant d'analyser les nouvelles vidéos.
   if (data.rebuild) {
@@ -1204,23 +1296,45 @@ async function analyseNext() {
     const model = settings.geminiModel || gemini.DEFAULT_MODEL;
     try {
       const system = systemPrompt();
+      // Everything about the journal when it fits; otherwise search memory if it is ready, or the most recent.
+      const plan0 = journal.defaultPlan(data, e);
+      const search = plan0.mode === 'recent' && memoryReady();
       if (!e.transcript) {
-        // Un seul appel : Gemini reçoit le son, transcrit, écrit la fiche et met à jour les sujets.
         jobs[e.id] = { step: 'Preparing the sound', pct: 0 }; pushState();
         tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'carnet-son-'));
         const voice = await render.extractVoice(ffmpeg, path.join(journalDir(), e.file), path.join(tmp, 'voix'), e.duration || 600, trackBg);
         const audio = { mimeType: voice.mimeType, data: fs.readFileSync(voice.file).toString('base64') };
-        jobs[e.id] = { step: 'Transcription and analysis', pct: 0 }; pushState();
-        const a = await callGemini(system, journal.entryAudioPrompt(data, e), gemini.ENTRY_AUDIO_SCHEMA, audio);
-        e.transcript = { segments: journal.segmentsFromGemini(a.transcription, e.duration), model: 'gemini:' + model, at: Date.now() };
-        if (e.transcript.segments.length) journal.applyEntryAnalysis(data, e, a, { model, at: Date.now() });
-        else e.analysis = journal.emptyAnalysis(e.title);
+        if (search) {
+          // Search memory: the transcript first (1 call), so the search can read it, then the card (1 call).
+          jobs[e.id] = { step: 'Transcription by Gemini', pct: 0 }; pushState();
+          const tr = await callGemini(system, journal.transcriptPrompt(data, e), gemini.TRANSCRIPT_SCHEMA, audio);
+          e.transcript = { segments: journal.segmentsFromGemini(tr.transcription, e.duration), model: 'gemini:' + model, at: Date.now() };
+          persist();
+          if (e.transcript.segments.length) {
+            const plan = await contextFor(e, plan0);
+            const context = journal.planSummary(data, plan);
+            jobs[e.id] = { step: 'Analysis', pct: 0 }; pushState();
+            const a = await callGemini(system, journal.entryPrompt(data, e, plan), gemini.ENTRY_SCHEMA);
+            journal.applyEntryAnalysis(data, e, a, { model, at: Date.now(), context });
+          } else e.analysis = journal.emptyAnalysis(e.title);
+        } else {
+          // Un seul appel : Gemini reçoit le son, transcrit, écrit la fiche et met à jour les sujets.
+          const context = journal.planSummary(data, plan0);
+          jobs[e.id] = { step: 'Transcription and analysis', pct: 0 }; pushState();
+          const a = await callGemini(system, journal.entryAudioPrompt(data, e, plan0), gemini.ENTRY_AUDIO_SCHEMA, audio);
+          e.transcript = { segments: journal.segmentsFromGemini(a.transcription, e.duration), model: 'gemini:' + model, at: Date.now() };
+          if (e.transcript.segments.length) journal.applyEntryAnalysis(data, e, a, { model, at: Date.now(), context });
+          else e.analysis = journal.emptyAnalysis(e.title);
+        }
       } else if (!e.transcript.segments.length) {
         // Rien à analyser : pas d'appel, fiche minimale.
         e.analysis = journal.emptyAnalysis(e.title);
       } else {
-        const a = await callGemini(system, journal.entryPrompt(data, e), gemini.ENTRY_SCHEMA);
-        journal.applyEntryAnalysis(data, e, a, { model, at: Date.now() });
+        const plan = search ? await contextFor(e, plan0) : plan0;
+        const context = journal.planSummary(data, plan);
+        jobs[e.id] = { step: 'Analysis', pct: 0 }; pushState();
+        const a = await callGemini(system, journal.entryPrompt(data, e, plan), gemini.ENTRY_SCHEMA);
+        journal.applyEntryAnalysis(data, e, a, { model, at: Date.now(), context });
       }
       if (journal.hasIdeas(e)) data.bilanDue = true;
     } catch (err) {
@@ -1335,6 +1449,7 @@ function work() {
   if (data.broken || recordingNow()) return;
   transcribeNext();
   analyseNext().catch(() => {});
+  memorySync().catch(() => {});
 }
 // Reprend le travail régulièrement (nouveau jour de quota, ordinateur sorti de veille).
 setInterval(() => { work(); pushState(); }, 10 * 60 * 1000);
@@ -1348,6 +1463,15 @@ app.on('web-contents-created', (_e, wc) => wc.on('render-process-gone', () => { 
 
 // ---------- IPC ----------
 ipcMain.handle('journal-state', () => state());
+// Search memory: build it now (even when the journal still fits), or make every vector again.
+ipcMain.handle('memory-build', (_e, { again } = {}) => {
+  if (!journalDir()) return state();
+  saveSettings({ searchMemory: 'on' });
+  if (again) { const idx = memIndex(); memory.drop(idx, Object.keys(idx.items)); try { memory.save(mem.dir, idx); } catch (_) {} }
+  memError = null; memWaitUntil = 0;
+  memorySync().catch(() => {});
+  return state();
+});
 
 ipcMain.handle('journal-choose-dir', async () => {
   const r = await dialog.showOpenDialog(win, {
@@ -1440,6 +1564,8 @@ ipcMain.handle('journal-entry', (_e, { id, action, patch }) => {
   if (action === 'remove') {
     data.entries = data.entries.filter((x) => x !== e);
     journal.pruneSubjects(data);
+    data.precisions = (data.precisions || []).filter((p) => p.entry !== e.id);
+    data.checks = journal.checksOf(data).filter((c) => c.entry !== e.id).map((c) => (c.beforeEntry === e.id ? { ...c, beforeEntry: null } : c));
     if (!data.entries.length) Object.defineProperty(data, 'emptiedOnPurpose', { value: true, writable: true, enumerable: false });
   }
   if (action === 'edit' && patch) {
@@ -1475,46 +1601,97 @@ ipcMain.handle('journal-bilan', async (_e, period) => {
   return state();
 });
 
-// Précisions : ajouter, modifier, supprimer.
-ipcMain.handle('journal-precision', (_e, { action, id, texte, portee, entry }) => {
-  assertWritable();
-  data.precisions = data.precisions || [];
-  const txt = String(texte || '').trim().slice(0, 2000);
-  if (action === 'add' && txt) {
-    data.precisions.push({ id: 'p' + Date.now().toString(36), texte: txt, portee: portee === 'video' && entry ? 'video' : 'journal', entry: portee === 'video' ? entry : (entry || null), at: Date.now(), appliquee: false });
-  }
-  const p = data.precisions.find((x) => x.id === id);
-  if (action === 'edit' && p && txt) { p.texte = txt; p.appliquee = false; if (portee) p.portee = portee === 'video' && p.entry ? 'video' : 'journal'; }
-  if (action === 'delete' && p) data.precisions = data.precisions.filter((x) => x !== p);
-  persist();
-  return state();
-});
-
-// Un appel : les précisions sont appliquées à tout ce qui a déjà été écrit (fiches, sujets, bilans, semaines).
-ipcMain.handle('journal-apply-precisions', async () => {
-  assertWritable();
+// ---------- Clarifications, permanent facts, checks ----------
+// A clarification corrects one video (1 call): its card, the subjects it fed, what came from it. It stays with the
+// video (used again only if that video is analysed again). Without Gemini right now, it waits on the video.
+async function fixVideo(e) {
+  const texts = (data.precisions || []).filter((p) => p.entry === e.id && !p.appliquee).map((p) => p.texte);
+  if (!texts.length) throw new Error(t('No clarification to apply.'));
   if (analysing || !getKey()) throw new Error(t('An analysis is already running, try again in a moment.'));
   if (gemini.usage(settings).left <= 0) throw new Error(t('No Gemini calls left today.'));
-  if (!(data.precisions || []).length) throw new Error(t('No clarification to apply.'));
   analysing = true;
-  jobs.precisions = { step: 'Updating with your clarifications', pct: 0 };
+  jobs[e.id] = { step: 'Correcting this video', pct: 0 };
   pushState();
-  let summary = null;
   try {
-    const r = await callGemini(systemPrompt(), journal.correctionPrompt(data), gemini.CORRECTION_SCHEMA);
-    summary = journal.applyCorrections(data, r);
-    for (const e of data.entries) if (e.analysis && e.analysis.corrige && Date.now() - e.analysis.corrige < 60000) renameFromAnalysis(e);
-    data.precisionError = null;
+    const r = await callGemini(systemPrompt(), journal.videoFixPrompt(data, e, texts), gemini.VIDEO_FIX_SCHEMA);
+    const summary = journal.applyVideoFix(data, e, r);
+    renameFromAnalysis(e);
+    e.fixError = null;
+    return summary;
   } catch (err) {
-    data.precisionError = String(err.message || err).slice(0, 300);
+    e.fixError = String(err.message || err).slice(0, 300);
     throw err;
   } finally {
-    delete jobs.precisions;
+    delete jobs[e.id];
     analysing = false;
     persist();
     setTimeout(work, 100);
   }
+}
+const canFix = (e) => !!(e && e.analysis && getKey() && !analysing && gemini.usage(settings).left > 0 && !geminiPaused());
+// The person is waiting for a correction: the analysis in progress finishes, the next ones wait for it.
+let fixQueued = 0;
+async function whenIdle(e, ms = 120e3) {
+  if (!(e && e.analysis && getKey() && gemini.usage(settings).left > 0 && !geminiPaused())) return;
+  fixQueued++;
+  try { const t0 = Date.now(); while (analysing && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 300)); }
+  finally { fixQueued--; }
+}
+function addClarification(e, texte) {
+  const txt = String(texte || '').trim().slice(0, 2000);
+  if (!txt) return null;
+  data.precisions = data.precisions || [];
+  const p = { id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), texte: txt, portee: 'video', entry: e.id, at: Date.now(), appliquee: false };
+  data.precisions.push(p);
+  return p;
+}
+// Adds a clarification to a video and corrects it now when possible (otherwise it waits on the video, and is used if
+// the video is analysed again). Without text: applies what waits.
+ipcMain.handle('journal-clarify', async (_e, { entry, texte }) => {
+  assertWritable();
+  const e = findEntry(entry);
+  if (!e) throw new Error(t('Unknown video.'));
+  addClarification(e, texte);
+  persist();
+  if (!e.analysis) return { state: state(), pending: true };
+  await whenIdle(e);
+  if (!canFix(e)) return { state: state(), pending: true };
+  const summary = await fixVideo(e);
   return { state: state(), summary };
+});
+// Clarifications of a video: edit (to apply again) or delete.
+ipcMain.handle('journal-precision', (_e, { action, id, texte }) => {
+  assertWritable();
+  data.precisions = data.precisions || [];
+  const p = data.precisions.find((x) => x.id === id);
+  const txt = String(texte || '').trim().slice(0, 2000);
+  if (action === 'edit' && p && txt) { p.texte = txt; p.appliquee = false; }
+  if (action === 'delete' && p) data.precisions = data.precisions.filter((x) => x !== p);
+  persist();
+  return state();
+});
+// Permanent facts: add, edit, delete.
+ipcMain.handle('journal-fact', (_e, a) => {
+  assertWritable();
+  journal.factEdit(data, a || {});
+  persist();
+  return state();
+});
+// A check answered: 'before' (the journal was right), 'now' (the video is right) or 'both'. keep: the answer also
+// becomes a permanent fact. The video concerned is corrected when there is something to correct (1 call).
+ipcMain.handle('journal-check', async (_e, { id, choice, keep }) => {
+  assertWritable();
+  const r = journal.checkAnswer(data, id, ['before', 'now', 'both'].includes(choice) ? choice : 'both');
+  if (!r) return { state: state() };
+  if (keep && r.fact) journal.factEdit(data, { action: 'add', text: r.fact, entry: r.check.entry, source: 'check' });
+  const e = r.fix && findEntry(r.fix.entry);
+  if (e) addClarification(e, r.fix.text);
+  persist();
+  if (!e) return { state: state() };
+  await whenIdle(e);
+  if (!canFix(e)) return { state: state(), pending: true, entry: e.id };
+  const summary = await fixVideo(e);
+  return { state: state(), summary, entry: e.id };
 });
 
 ipcMain.handle('journal-semaine', async (_e, key) => {

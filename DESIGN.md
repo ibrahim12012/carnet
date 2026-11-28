@@ -23,6 +23,10 @@ Kinds of steps forward (Progress page, Remember, cards): a small outlined label 
 
 Timelines of the steps forward: a time axis with month ticks (weeks under 50 days) and faint vertical lines, today marked in the accent. The line of a step is dotted grey before the step and 4 px in the colour of its kind (45 % opacity) after it. Marks: started, a grey ring; came up, a small grey dot; the step, a 15 px dot in the colour of its kind; held, an accent dot; did not hold, a light red dot (`#ff8a8d`); your answers, rings (accent or light red); subject concluded, a small accent square; next check, a dashed grey ring. The same marks sit on the vertical line of the timeline of one step, with the date on the left and the time between two events in grey italics.
 
+Clarification card of a video and To check: a card with a left border in the chapter yellow (`#f0b429`), like the clarifications. In To check, each difference has two lines with a small uppercase label: "Your journal" in secondary grey, "This video" in the chapter yellow, then the three answers as small buttons, labelled with the text they keep, and the "keep as a permanent fact" box on the right. After a correction, the offer to keep it as a permanent fact sits in a Panel 2 box under the form.
+
+How a video was analysed: one secondary grey line at the end of its summary card; with search memory, it opens on what was found (subjects and videos as links).
+
 All subjects timeline: the page is wider (1240 px). A subject's line is 3 px, blue grey (`#5d7086`) while open, the accent at 50 % once concluded, dotted up to today while open. A dot per video in grey blue (`#8b9bb0`), 7 to 13 px depending on how many ideas of the subject the video has; yellow when where you stand changed; a white ring for the first time; an accent square when concluded (a hollow one when reopened).
 
 ## Type
